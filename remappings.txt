@@ -1,0 +1,4 @@
+@sp1-contracts/=./lib/sp1-contracts/contracts/src/
+@openzeppelin/contracts/=./lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/
+@openzeppelin/contracts-upgradeable/=./lib/openzeppelin-contracts-upgradeable/contracts/
+@solady=./lib/solady/src/
