@@ -4,18 +4,18 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {StakingV1} from "../src/legacy/StakingV1.sol";
-import {StakingUpgrade} from "../src/StakingUpgrade.sol";
+import {StakingFinal} from "../src/StakingFinal.sol";
 
 /// @dev Drives randomized sequences of every state-changing entrypoint against a
 ///      proxy that has ALREADY been migrated from v1 (`StakingV1`) to v2
-///      (`StakingUpgrade`) carrying non-zero reward state through the real
+///      (`StakingFinal`) carrying non-zero reward state through the real
 ///      `upgradeToAndCall(reinitializePermit)` path. Encodes the solvency proof
 ///      from the security review: balance always covers principal + committed + parked, and
 ///      outstanding accrued rewards never exceed the committed pool — proving the
 ///      cumulative→outstanding migration seed is self-consistent under any
 ///      subsequent operation mix. Handler is BOTH owner and feeDispatcher.
-contract StakingUpgradeHandler is Test {
-    StakingUpgrade public immutable staking;
+contract StakingFinalHandler is Test {
+    StakingFinal public immutable staking;
 
     uint256 public constant ACTOR_COUNT = 4;
     address[] public actors;
@@ -35,7 +35,7 @@ contract StakingUpgradeHandler is Test {
         vm.stopPrank();
     }
 
-    constructor(StakingUpgrade _staking) {
+    constructor(StakingFinal _staking) {
         staking = _staking;
         for (uint256 i; i < ACTOR_COUNT; i++) {
             actors.push(makeAddr(string(abi.encodePacked("uactor", vm.toString(i)))));
@@ -142,22 +142,22 @@ contract StakingUpgradeHandler is Test {
     }
 }
 
-contract StakingUpgradeInvariantTest is Test {
-    StakingUpgrade internal staking;
-    StakingUpgradeHandler internal handler;
+contract StakingFinalInvariantTest is Test {
+    StakingFinal internal staking;
+    StakingFinalHandler internal handler;
 
     function setUp() public {
         vm.warp(1_000_000); // deterministic non-zero start for timestamp checkpoints
 
         // 1. Deploy a v1 proxy with handler as owner + feeDispatcher.
         StakingV1 v1Impl = new StakingV1();
-        handler = StakingUpgradeHandler(payable(computeCreateAddress(address(this), vm.getNonce(address(this)) + 1)));
+        handler = StakingFinalHandler(payable(computeCreateAddress(address(this), vm.getNonce(address(this)) + 1)));
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(v1Impl), abi.encodeCall(StakingV1.initialize, (address(handler), address(handler), 1 hours))
         );
-        StakingUpgradeHandler deployed = new StakingUpgradeHandler(StakingUpgrade(payable(address(proxy))));
+        StakingFinalHandler deployed = new StakingFinalHandler(StakingFinal(payable(address(proxy))));
         require(address(deployed) == address(handler), "handler addr mismatch");
-        staking = StakingUpgrade(payable(address(proxy)));
+        staking = StakingFinal(payable(address(proxy)));
 
         // 2. Build NON-ZERO v1 reward state so the migration seed is exercised:
         //    stake → fees → partial elapse → partial claim leaves dispatched > claimed.
@@ -170,9 +170,9 @@ contract StakingUpgradeInvariantTest is Test {
         require(StakingV1(payable(address(proxy))).totalRewardsClaimed() > 0, "seed: no claimed");
 
         // 3. Upgrade v1 → v2 atomically with the migration (as owner).
-        StakingUpgrade newImpl = new StakingUpgrade();
+        StakingFinal newImpl = new StakingFinal();
         vm.prank(address(handler));
-        staking.upgradeToAndCall(address(newImpl), abi.encodeCall(StakingUpgrade.reinitializePermit, ()));
+        staking.upgradeToAndCall(address(newImpl), abi.encodeCall(StakingFinal.reinitializePermit, ()));
 
         // Sanity: the post-upgrade invariants must already hold at the migrated state.
         assertEq(staking.committedRewards(), staking.lifetimeRewardsScheduled() - staking.lifetimeRewardsClaimed());

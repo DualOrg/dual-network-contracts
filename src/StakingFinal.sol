@@ -15,7 +15,7 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/ut
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-/// @title StakingUpgrade
+/// @title StakingFinal
 /// @notice Upgrade implementation for the live Staking proxy. The reward/staking
 ///         logic below is byte-for-byte identical to the canonical `Staking`
 ///         contract; the only differences are storage bookkeeping required to
@@ -25,7 +25,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 ///         representation to the live-outstanding representation this logic uses.
 /// @dev    Storage layout for slots 0..11 is FROZEN to match deployed v1. New
 ///         state (`lifetimeRewardsScheduled`) is appended into the reserved gap.
-contract StakingUpgrade is
+contract StakingFinal is
     Initializable,
     ERC20Upgradeable,
     ERC20PermitUpgradeable,
@@ -153,7 +153,7 @@ contract StakingUpgrade is
 
     /// @notice One-time migration run atomically with the upgrade of an existing proxy.
     /// @dev    Invoke via `upgradeToAndCall(newImpl, abi.encodeCall(
-    ///         StakingUpgrade.reinitializePermit, ()))`. It:
+    ///         StakingFinal.reinitializePermit, ()))`. It:
     ///         1. initialises the ERC20Permit (EIP-712) domain that v1 never set; and
     ///         2. seeds the new `committedRewards` field (live outstanding) from the
     ///            preserved v1 counters. The two existing slots

@@ -4,16 +4,16 @@ pragma solidity ^0.8.24;
 import {Test, console2} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {StakingV1} from "../src/legacy/StakingV1.sol";
-import {StakingUpgrade} from "../src/StakingUpgrade.sol";
+import {StakingFinal} from "../src/StakingFinal.sol";
 
 /// @notice Validates that upgrading the deployed v1 `Staking` implementation to
-///         `StakingUpgrade` preserves all live state, seeds `committedRewards`
+///         `StakingFinal` preserves all live state, seeds `committedRewards`
 ///         correctly, and wires up the ERC20Permit domain that v1 lacked.
 ///
 ///         The local simulation deliberately builds NON-ZERO reward state
 ///         (stake → notify → claim) so the cumulative→outstanding migration math
 ///         is actually exercised — the live chain is currently all zeros.
-contract StakingUpgradeTest is Test {
+contract StakingFinalTest is Test {
     StakingV1 v1; // proxy, typed as v1 before the upgrade
 
     address owner = makeAddr("owner");
@@ -60,11 +60,11 @@ contract StakingUpgradeTest is Test {
         assertGt(v1.totalRewardsClaimed(), 0, "precondition: claimed > 0");
     }
 
-    function _upgrade() internal returns (StakingUpgrade s) {
-        StakingUpgrade newImpl = new StakingUpgrade();
+    function _upgrade() internal returns (StakingFinal s) {
+        StakingFinal newImpl = new StakingFinal();
         vm.prank(owner);
-        v1.upgradeToAndCall(address(newImpl), abi.encodeCall(StakingUpgrade.reinitializePermit, ()));
-        s = StakingUpgrade(payable(address(v1)));
+        v1.upgradeToAndCall(address(newImpl), abi.encodeCall(StakingFinal.reinitializePermit, ()));
+        s = StakingFinal(payable(address(v1)));
     }
 
     // ── migration correctness ──────────────────────────────────────────────────
@@ -86,7 +86,7 @@ contract StakingUpgradeTest is Test {
         uint256 alicePreview = v1.previewRewards(alice);
         uint256 bobPreview = v1.previewRewards(bob);
 
-        StakingUpgrade s = _upgrade();
+        StakingFinal s = _upgrade();
 
         // Renamed slots keep their exact values.
         assertEq(s.lifetimeRewardsScheduled(), dispatched, "slot4 value preserved");
@@ -114,7 +114,7 @@ contract StakingUpgradeTest is Test {
     /// @dev After the upgrade, stakers can still claim and the contract stays solvent.
     function test_Upgrade_ClaimStillWorksAndStaysSolvent() public {
         _buildNonZeroV1State();
-        StakingUpgrade s = _upgrade();
+        StakingFinal s = _upgrade();
 
         vm.warp(block.timestamp + REWARDS_DURATION); // finish the stream
 
@@ -145,7 +145,7 @@ contract StakingUpgradeTest is Test {
 
     function test_Upgrade_InitialisesPermitDomain() public {
         _buildNonZeroV1State();
-        StakingUpgrade s = _upgrade();
+        StakingFinal s = _upgrade();
 
         // Domain separator must match the intended ("Staked DUAL", "1") domain.
         bytes32 expected = keccak256(
@@ -178,7 +178,7 @@ contract StakingUpgradeTest is Test {
     // ── reinitializer guards ─────────────────────────────────────────────────────
 
     function test_ReinitializePermit_OnlyOnce() public {
-        StakingUpgrade s = _upgrade();
+        StakingFinal s = _upgrade();
         vm.prank(owner);
         vm.expectRevert(); // InvalidInitialization: reinitializer(2) already consumed
         s.reinitializePermit();
@@ -187,10 +187,10 @@ contract StakingUpgradeTest is Test {
     function test_ReinitializePermit_OnlyOwner() public {
         // Deploy a fresh v1 proxy and upgrade only the implementation (no init call),
         // so reinitializer(2) is still available, then prove non-owner can't call it.
-        StakingUpgrade newImpl = new StakingUpgrade();
+        StakingFinal newImpl = new StakingFinal();
         vm.prank(owner);
         v1.upgradeToAndCall(address(newImpl), "");
-        StakingUpgrade s = StakingUpgrade(payable(address(v1)));
+        StakingFinal s = StakingFinal(payable(address(v1)));
 
         vm.prank(alice);
         vm.expectRevert(); // OwnableUnauthorizedAccount
@@ -225,10 +225,10 @@ contract StakingUpgradeTest is Test {
         uint256 liveClaimed = live.totalRewardsClaimed();
         uint256 liveStaked = live.totalStaked();
 
-        StakingUpgrade newImpl = new StakingUpgrade();
+        StakingFinal newImpl = new StakingFinal();
         vm.prank(liveOwner);
-        live.upgradeToAndCall(address(newImpl), abi.encodeCall(StakingUpgrade.reinitializePermit, ()));
-        StakingUpgrade s = StakingUpgrade(proxy);
+        live.upgradeToAndCall(address(newImpl), abi.encodeCall(StakingFinal.reinitializePermit, ()));
+        StakingFinal s = StakingFinal(proxy);
 
         assertEq(s.feeDispatcher(), liveDispatcher, "feeDispatcher preserved");
         assertEq(s.rewardsDuration(), liveDuration, "rewardsDuration preserved");
