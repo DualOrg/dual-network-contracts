@@ -141,6 +141,41 @@ contract StakingFinalTest is Test {
         assertEq(bob.balance - bobBefore, bobShares + bobRewards, "bob received principal + rewards");
     }
 
+    /// @dev Regression (ChainSecurity #005 / #001) on the in-scope contract: a
+    ///      stake while a stream is active must not re-notify it. Rate, periodFinish
+    ///      and parked dust are left untouched, so the stream cannot be
+    ///      permissionlessly stretched nor setRewardsDuration re-locked by a staker.
+    function test_Stake_DoesNotRescheduleActiveStream() public {
+        // Upgrade the (zero-state) proxy, then drive StakingFinal directly.
+        StakingFinal s = _upgrade();
+
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        s.stake{value: 1 ether}();
+
+        // Fee that does not divide evenly → active stream plus a 1-wei parked dust.
+        uint256 fee = 3 * REWARDS_DURATION + 1;
+        vm.deal(dispatcher, fee);
+        vm.prank(dispatcher);
+        (bool ok,) = address(s).call{value: fee}("");
+        assertTrue(ok);
+        assertEq(s.rewardRate(), 3);
+        assertEq(s.pendingRewards(), 1);
+
+        vm.warp(block.timestamp + REWARDS_DURATION / 2);
+        uint256 finishBefore = s.periodFinish();
+        uint256 rateBefore = s.rewardRate();
+
+        // Mid-stream stake: pendingRewards > 0 but a period is still active.
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        s.stake{value: 1 ether}();
+
+        assertEq(s.periodFinish(), finishBefore, "stream must not be extended");
+        assertEq(s.rewardRate(), rateBefore, "rate must not change");
+        assertEq(s.pendingRewards(), 1, "dust must stay parked, not folded");
+    }
+
     // ── permit wiring ───────────────────────────────────────────────────────────
 
     function test_Upgrade_InitialisesPermitDomain() public {

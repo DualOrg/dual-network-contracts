@@ -240,6 +240,44 @@ contract StakingTest is Test {
         assertEq(address(staking).balance, staking.totalSupply() + staking.pendingRewards());
     }
 
+    /// @dev Regression (ChainSecurity #005 / #001): a stake while a stream is
+    ///      active must NOT re-notify it. Rate and periodFinish stay put and the
+    ///      parked dust stays parked, so the stream cannot be permissionlessly
+    ///      stretched and setRewardsDuration cannot be re-locked by a staker.
+    function test_Stake_DoesNotRescheduleActiveStream() public {
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        staking.stake{value: 1 ether}();
+
+        // Fee that does not divide evenly → active stream plus a 1-wei parked dust.
+        uint256 fee = 3 * REWARDS_DURATION + 1;
+        vm.deal(dispatcher, fee);
+        vm.prank(dispatcher);
+        (bool ok,) = address(staking).call{value: fee}("");
+        assertTrue(ok);
+        assertEq(staking.rewardRate(), 3);
+        assertEq(staking.pendingRewards(), 1);
+
+        vm.warp(block.timestamp + REWARDS_DURATION / 2);
+        uint256 finishBefore = staking.periodFinish();
+        uint256 rateBefore = staking.rewardRate();
+
+        // Mid-stream stake: pendingRewards > 0 but a period is still active.
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        staking.stake{value: 1 ether}();
+
+        assertEq(staking.periodFinish(), finishBefore, "stream must not be extended");
+        assertEq(staking.rewardRate(), rateBefore, "rate must not change");
+        assertEq(staking.pendingRewards(), 1, "dust must stay parked, not folded");
+
+        // Repeated dust stakes likewise cannot push the finish out.
+        vm.deal(bob, 1 wei);
+        vm.prank(bob);
+        staking.stake{value: 1 wei}();
+        assertEq(staking.periodFinish(), finishBefore, "repeat stake must not extend");
+    }
+
     // ── unstake ──────────────────────────────────────────────────────────────
 
     function test_Unstake_BurnsXDUALAndReturnsETH() public {

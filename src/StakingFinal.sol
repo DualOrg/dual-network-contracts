@@ -24,7 +24,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 ///         (b) converts the `committedRewards` slot from v1's cumulative
 ///         representation to the live-outstanding representation this logic uses.
 /// @dev    Storage layout for slots 0..11 is FROZEN to match deployed v1. New
-///         state (`lifetimeRewardsScheduled`) is appended into the reserved gap.
+///         state (`committedRewards`) is appended into the reserved gap.
 contract StakingFinal is
     Initializable,
     ERC20Upgradeable,
@@ -171,12 +171,17 @@ contract StakingFinal is
         if (msg.value == 0) revert ZeroAmount();
 
         // msg.sender's reward accrual is handled by _mint -> _update -> _updateReward.
-        uint256 rewardsToNotify = pendingRewards;
-
         totalStaked += msg.value;
         _mint(msg.sender, msg.value);
 
-        if (rewardsToNotify > 0) {
+        // Only bootstrap a stream from parked rewards when none is active. A stake
+        // must not re-notify a live stream: doing so would let any account
+        // permissionlessly re-amortise the leftover over a fresh duration (lowering
+        // the rate and pushing periodFinish out) and keep setRewardsDuration locked.
+        // Parked dust accumulated during an active period is folded by the next fee
+        // inflow or once the current period ends.
+        if (pendingRewards > 0 && block.timestamp >= periodFinish) {
+            uint256 rewardsToNotify = pendingRewards;
             pendingRewards = 0;
             _notifyReward(rewardsToNotify);
         }
