@@ -80,7 +80,7 @@ contract UpgradeStaking is Script {
         StakingFinal s = StakingFinal(payable(proxy));
         console2.log("--- post-upgrade ---");
         console2.log("committedRewards         :", s.committedRewards());
-        console2.log("lifetimeRewardsScheduled :", s.lifetimeRewardsScheduled());
+        console2.log("lifetimeRewardsReceived :", s.lifetimeRewardsReceived());
         console2.log("lifetimeRewardsClaimed   :", s.lifetimeRewardsClaimed());
         console2.log("pendingRewards           :", s.pendingRewards());
         console2.log("DOMAIN_SEPARATOR set     :", s.DOMAIN_SEPARATOR() != bytes32(0));

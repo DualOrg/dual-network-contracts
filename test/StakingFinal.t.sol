@@ -89,7 +89,7 @@ contract StakingFinalTest is Test {
         StakingFinal s = _upgrade();
 
         // Renamed slots keep their exact values.
-        assertEq(s.lifetimeRewardsScheduled(), dispatched, "slot4 value preserved");
+        assertEq(s.lifetimeRewardsReceived(), dispatched, "slot4 value preserved");
         assertEq(s.lifetimeRewardsClaimed(), claimed, "slot5 value preserved");
         // New field seeded to live-outstanding.
         assertEq(s.committedRewards(), dispatched - claimed, "committedRewards seeded");
@@ -174,6 +174,42 @@ contract StakingFinalTest is Test {
         assertEq(s.periodFinish(), finishBefore, "stream must not be extended");
         assertEq(s.rewardRate(), rateBefore, "rate must not change");
         assertEq(s.pendingRewards(), 1, "dust must stay parked, not folded");
+    }
+
+    /// @dev Regression (ChainSecurity #003) on the in-scope contract: with a
+    ///      zero-state migration (as on the live proxy) lifetimeRewardsReceived
+    ///      seeds to 0 and must then count each external inflow exactly once, even
+    ///      across a park-then-reschedule cycle.
+    function test_LifetimeRewardsReceived_CountsInflowsOnce() public {
+        StakingFinal s = _upgrade(); // zero-state proxy → counter seeds to 0
+        assertEq(s.lifetimeRewardsReceived(), 0, "seeds to zero on live-like state");
+
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        s.stake{value: 1 ether}();
+
+        uint256 fee1 = 7 ether;
+        vm.deal(dispatcher, fee1);
+        vm.prank(dispatcher);
+        (bool ok1,) = address(s).call{value: fee1}("");
+        assertTrue(ok1);
+
+        vm.warp(block.timestamp + REWARDS_DURATION / 2);
+        vm.prank(alice);
+        s.exit();
+        assertGt(s.pendingRewards(), 0, "remainder parked");
+
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        s.stake{value: 1 ether}(); // re-folds the parked remainder
+
+        uint256 fee2 = 3 ether;
+        vm.deal(dispatcher, fee2);
+        vm.prank(dispatcher);
+        (bool ok2,) = address(s).call{value: fee2}("");
+        assertTrue(ok2);
+
+        assertEq(s.lifetimeRewardsReceived(), fee1 + fee2, "counted each inflow once");
     }
 
     // ── permit wiring ───────────────────────────────────────────────────────────
@@ -269,7 +305,7 @@ contract StakingFinalTest is Test {
         assertEq(s.rewardsDuration(), liveDuration, "rewardsDuration preserved");
         assertEq(s.pendingRewards(), livePending, "pendingRewards preserved");
         assertEq(s.totalStaked(), liveStaked, "totalStaked preserved");
-        assertEq(s.lifetimeRewardsScheduled(), liveDispatched, "scheduled preserved");
+        assertEq(s.lifetimeRewardsReceived(), liveDispatched, "scheduled preserved");
         assertEq(s.lifetimeRewardsClaimed(), liveClaimed, "claimed preserved");
         assertEq(s.committedRewards(), liveDispatched - liveClaimed, "committedRewards seeded");
         assertTrue(s.DOMAIN_SEPARATOR() != bytes32(0), "permit domain initialised");

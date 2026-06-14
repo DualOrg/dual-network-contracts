@@ -103,9 +103,9 @@ in v1 and become a *stored* field in v2.)
 | v1 field (slot) | v2 field (slot) | Note |
 |-----------------|-----------------|------|
 | `totalStaked` (3) | `totalStaked` (3) | unchanged |
-| `totalFeesDispatched` (4) | `lifetimeRewardsScheduled` (4) | rename, value preserved |
+| `totalFeesDispatched` (4) | `lifetimeRewardsReceived` (4) | slot reused, value preserved; re-purposed to a cumulative external-inflow counter (counted once at ingestion, never reduced). v1 kept it net; v2 counts gross inflow. Analytics only. |
 | `totalRewardsClaimed` (5) | `lifetimeRewardsClaimed` (5) | rename, value preserved |
-| — | `committedRewards` (12, new) | live outstanding = `scheduled − claimed`, seeded at upgrade |
+| — | `committedRewards` (12, new) | live outstanding; seeded once at upgrade from the v1 net value `scheduled − claimed`, then maintained directly. After any park, `scheduled − claimed` ≠ `committedRewards` (it equals committed + parked) — use `committedRewards`. |
 
 In v1, available-for-rewards used `totalFeesDispatched − totalRewardsClaimed`. In
 v2 the same quantity is maintained directly as `committedRewards`. The reward
@@ -123,7 +123,7 @@ v2 decomposes the v1 inline streaming logic into named internal helpers:
 ```solidity
 function reinitializePermit() external onlyOwner reinitializer(2) {
     __ERC20Permit_init("Staked DUAL");
-    committedRewards = lifetimeRewardsScheduled - lifetimeRewardsClaimed;
+    committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed;
 }
 ```
 
@@ -139,12 +139,12 @@ v1 counters (`= totalFeesDispatched − totalRewardsClaimed`; safe because
 **Removed selectors** (calls revert after upgrade):
 - `emergencyWithdraw(address,uint256)`
 - `withdrawableSurplus()`
-- `totalFeesDispatched()` → renamed to `lifetimeRewardsScheduled()`
+- `totalFeesDispatched()` → renamed to `lifetimeRewardsReceived()`
 - `totalRewardsClaimed()` → renamed to `lifetimeRewardsClaimed()`
 - event `EmergencyWithdraw`, error `ExceedsWithdrawableSurplus`
 
 **Added selectors:**
-- `committedRewards()`, `lifetimeRewardsScheduled()`, `lifetimeRewardsClaimed()`
+- `committedRewards()`, `lifetimeRewardsReceived()`, `lifetimeRewardsClaimed()`
 - `reinitializePermit()`
 - ERC20Permit: `permit(...)`, `DOMAIN_SEPARATOR()`, `nonces(address)`, `eip712Domain()`
 

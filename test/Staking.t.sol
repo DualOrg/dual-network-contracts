@@ -278,6 +278,93 @@ contract StakingTest is Test {
         assertEq(staking.periodFinish(), finishBefore, "repeat stake must not extend");
     }
 
+    /// @dev Regression (ChainSecurity #003): lifetimeRewardsReceived must count
+    ///      each external inflow exactly once. Park-then-reschedule (last staker
+    ///      exits, a new staker re-folds the parked remainder) previously bumped
+    ///      the counter a second time for the same DUAL; it must not.
+    function test_LifetimeRewardsReceived_CountsInflowsOnce() public {
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        staking.stake{value: 1 ether}();
+
+        uint256 fee1 = 7 ether;
+        vm.deal(dispatcher, fee1);
+        vm.prank(dispatcher);
+        (bool ok1,) = address(staking).call{value: fee1}("");
+        assertTrue(ok1);
+
+        // Half-way, alice exits → the un-streamed remainder is parked back.
+        vm.warp(block.timestamp + REWARDS_DURATION / 2);
+        vm.prank(alice);
+        staking.exit();
+        assertEq(staking.totalSupply(), 0);
+        assertGt(staking.pendingRewards(), 0, "remainder parked");
+
+        // A new staker re-folds the parked remainder into a fresh stream
+        // (this re-schedule is where the old counter double-counted).
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        staking.stake{value: 1 ether}();
+
+        uint256 fee2 = 3 ether;
+        vm.deal(dispatcher, fee2);
+        vm.prank(dispatcher);
+        (bool ok2,) = address(staking).call{value: fee2}("");
+        assertTrue(ok2);
+
+        // Exactly the external DUAL ever sent — never more, despite the recycle.
+        assertEq(staking.lifetimeRewardsReceived(), fee1 + fee2, "counted each inflow once");
+        // And it never under-states claims.
+        assertLe(staking.lifetimeRewardsClaimed(), staking.lifetimeRewardsReceived());
+    }
+
+    /// @dev #003: both inflow paths (dispatcher fees AND owner bonuses) are counted,
+    ///      once each, including when a bonus lands mid-stream.
+    function test_LifetimeRewardsReceived_CountsFeesAndBonusOnce() public {
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        staking.stake{value: 1 ether}();
+
+        uint256 fee = 4 ether;
+        vm.deal(dispatcher, fee);
+        vm.prank(dispatcher);
+        (bool ok,) = address(staking).call{value: fee}("");
+        assertTrue(ok);
+        assertEq(staking.lifetimeRewardsReceived(), fee);
+
+        // Owner bonus mid-stream folds straight into the active stream.
+        vm.warp(block.timestamp + 1 days);
+        uint256 bonus = 2 ether;
+        vm.deal(owner, bonus);
+        vm.prank(owner);
+        staking.addBonus{value: bonus}();
+
+        assertEq(staking.lifetimeRewardsReceived(), fee + bonus, "fee + bonus, each counted once");
+    }
+
+    /// @dev #003: inflows are counted at receipt even when they are only parked
+    ///      (no stakers yet, or paused) rather than streamed immediately.
+    function test_LifetimeRewardsReceived_CountsParkedInflowAtReceipt() public {
+        // No stakers → fee is parked, but still counted.
+        uint256 fee = 3 ether;
+        vm.deal(dispatcher, fee);
+        vm.prank(dispatcher);
+        (bool ok,) = address(staking).call{value: fee}("");
+        assertTrue(ok);
+        assertEq(staking.totalSupply(), 0);
+        assertEq(staking.pendingRewards(), fee, "parked");
+        assertEq(staking.lifetimeRewardsReceived(), fee, "counted while parked (no stakers)");
+
+        // Paused inflow is likewise parked and counted.
+        vm.prank(owner);
+        staking.pause();
+        vm.deal(dispatcher, 1 ether);
+        vm.prank(dispatcher);
+        (bool ok2,) = address(staking).call{value: 1 ether}("");
+        assertTrue(ok2);
+        assertEq(staking.lifetimeRewardsReceived(), fee + 1 ether, "counted while paused");
+    }
+
     // ── unstake ──────────────────────────────────────────────────────────────
 
     function test_Unstake_BurnsXDUALAndReturnsETH() public {

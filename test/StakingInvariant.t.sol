@@ -190,7 +190,19 @@ contract StakingInvariantTest is Test {
 
     /// @notice Committed reward accounting never goes negative.
     function invariant_claimsBounded() public view {
-        assertLe(staking.lifetimeRewardsClaimed(), staking.lifetimeRewardsScheduled(), "claimed > scheduled");
+        assertLe(staking.lifetimeRewardsClaimed(), staking.lifetimeRewardsReceived(), "claimed > received");
+    }
+
+    /// @notice Reward-inflow conservation (ChainSecurity #003): every reward DUAL
+    ///         ever received is, right now, either claimed out, committed to a
+    ///         stream, or parked. The lifetime inflow counter is therefore exact
+    ///         and never double-counts parked-then-rescheduled rewards.
+    function invariant_rewardInflowConserved() public view {
+        assertEq(
+            staking.lifetimeRewardsReceived() - staking.lifetimeRewardsClaimed(),
+            staking.committedRewards() + staking.pendingRewards(),
+            "reward inflow not conserved (received - claimed != committed + parked)"
+        );
     }
 
     /// @notice Snapshotted-but-unclaimed rewards are always covered by the

@@ -67,7 +67,7 @@ The authoritative, comment-stripped diff is reproduced here. There are
 | 1 | `userRewardPerTokenPaid` | `userRewardPerTokenPaid` | `userRewardPerTokenPaid` |
 | 2 | `userAccruedRewards` | `userAccruedRewards` | `userAccruedRewards` |
 | 3 | `committedRewards` | **`totalStaked`** | `totalStaked` |
-| 4 | `lifetimeRewardsScheduled` | `lifetimeRewardsScheduled` | `totalFeesDispatched` |
+| 4 | `lifetimeRewardsReceived` | `lifetimeRewardsReceived` | `totalFeesDispatched` |
 | 5 | `lifetimeRewardsClaimed` | `lifetimeRewardsClaimed` | `totalRewardsClaimed` |
 | 6 | `feeDispatcher` | `feeDispatcher` | `feeDispatcher` |
 | 7 | `rewardRate` | `rewardRate` | `rewardRate` |
@@ -98,7 +98,7 @@ Notes:
 ```solidity
 function reinitializePermit() external onlyOwner reinitializer(2) {
     __ERC20Permit_init("Staked DUAL");
-    committedRewards = lifetimeRewardsScheduled - lifetimeRewardsClaimed;
+    committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed;
 }
 ```
 
@@ -111,7 +111,7 @@ This does two things, atomically with the upgrade:
    `committedRewards = totalFeesDispatched − totalRewardsClaimed`. Safe because
    `claimed ≤ dispatched` (no underflow).
 
-It does **not** mutate any existing slot — slots 4 (`lifetimeRewardsScheduled`)
+It does **not** mutate any existing slot — slots 4 (`lifetimeRewardsReceived`)
 and 5 (`lifetimeRewardsClaimed`) keep their v1 values verbatim.
 
 ### 4. `stake()` — one extra line
@@ -143,11 +143,11 @@ and 5 (`lifetimeRewardsClaimed`) keep their v1 values verbatim.
 | v1 field (deployed) | v2 field | Relationship |
 |---------------------|----------|--------------|
 | `totalStaked` | `totalStaked` | Identical. Mirrors `totalSupply()`. |
-| `totalFeesDispatched` | `lifetimeRewardsScheduled` | **Rename only**, value preserved. Cumulative rewards scheduled; increment-only going forward (v1 also decremented on stream shrink, so the seed carries historical shrink-backs — analytics only, never read by logic). |
+| `totalFeesDispatched` | `lifetimeRewardsReceived` | Slot reused, value preserved. Re-purposed to a **cumulative external-inflow counter**: incremented once at ingestion (`receive()` / `addBonus()`) by the full amount received, never reduced, never double-counting parked-then-rescheduled rewards. v1 maintained this slot as a *net* figure (decremented on shrink/park); v2 counts gross inflow instead. Analytics only, never read by logic. |
 | `totalRewardsClaimed` | `lifetimeRewardsClaimed` | **Rename only**, identical semantics, value preserved. |
-| *(did not exist)* | `committedRewards` | **New** field. Live outstanding rewards = `lifetimeRewardsScheduled − lifetimeRewardsClaimed`. The **only** accounting field read by logic (`_availableForRewards`). |
+| *(did not exist)* | `committedRewards` | **New** field: live outstanding rewards, and the **only** accounting field read by logic (`_availableForRewards`). Seeded once at migration from `lifetimeRewardsReceived − lifetimeRewardsClaimed` (the v1 *net* value), then maintained directly. After any park that expression no longer equals `committedRewards` (it equals committed + parked), so do not use it as live outstanding. |
 
-`lifetimeRewardsScheduled` and `lifetimeRewardsClaimed` are write-only analytics
+`lifetimeRewardsReceived` and `lifetimeRewardsClaimed` are write-only analytics
 counters (never read by logic). `committedRewards` is the single accounting
 field that drives a decision (the reward-solvency guard in `_notifyReward`).
 

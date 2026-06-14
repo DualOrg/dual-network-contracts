@@ -47,8 +47,14 @@ contract Staking is
     /// @notice Rewards committed to streams and not yet claimed by stakers.
     uint256 public committedRewards;
 
-    /// @notice Lifetime rewards committed to streams, excluding parked dust.
-    uint256 public lifetimeRewardsScheduled;
+    /// @notice Cumulative external reward DUAL ingested — fees via `receive()` and
+    ///         owner bonuses via `addBonus()` — counted exactly once at receipt and
+    ///         never reduced. Rewards that are parked and later re-scheduled are NOT
+    ///         counted again, so this is a faithful lifetime inflow total. Analytics
+    ///         only: `committedRewards` is the authoritative outstanding figure;
+    ///         `lifetimeRewardsReceived - lifetimeRewardsClaimed` equals committed +
+    ///         parked, not live outstanding.
+    uint256 public lifetimeRewardsReceived;
 
     /// @notice Lifetime rewards claimed by stakers.
     uint256 public lifetimeRewardsClaimed;
@@ -361,11 +367,12 @@ contract Staking is
     }
 
     function _replaceLeftoverRewards(uint256 leftover, uint256 scheduled) internal {
-        // `leftover` was already committed by the previous stream.
+        // `leftover` was already committed by the previous stream. Only the live
+        // committed pool moves here; lifetime inflow is counted once at ingestion
+        // (see `_ingestRewards`), so parked-then-rescheduled rewards are never
+        // double-counted.
         if (scheduled >= leftover) {
-            uint256 additional = scheduled - leftover;
-            committedRewards += additional;
-            lifetimeRewardsScheduled += additional;
+            committedRewards += scheduled - leftover;
         } else {
             committedRewards -= leftover - scheduled;
         }
@@ -448,6 +455,12 @@ contract Staking is
     ///      is no supply yet OR the contract is paused; otherwise fold pending
     ///      rewards in and start/extend the stream.
     function _ingestRewards(uint256 amount) internal {
+        // Count every external reward inflow exactly once, at receipt — whether it
+        // is parked now or streamed immediately, and regardless of any later
+        // park / re-schedule. Keeps lifetimeRewardsReceived a true cumulative
+        // inflow total (no double-counting of recycled parked rewards).
+        lifetimeRewardsReceived += amount;
+
         if (totalSupply() == 0 || paused()) {
             _parkRewards(amount);
             return;

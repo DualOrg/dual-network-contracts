@@ -59,10 +59,19 @@ contract StakingFinal is
     ///         logic reads `totalSupply()`, exactly like the canonical contract.
     uint256 public totalStaked; // slot 3
 
-    /// @notice Lifetime rewards committed to streams, excluding parked dust.
-    /// @dev    Slot reused from v1's `totalFeesDispatched` — pure rename, the
-    ///         stored value is preserved untouched. Increment-only going forward.
-    uint256 public lifetimeRewardsScheduled; // slot 4
+    /// @notice Cumulative external reward DUAL ingested — fees via `receive()` and
+    ///         owner bonuses via `addBonus()` — counted exactly once at receipt and
+    ///         never reduced. Rewards that are parked and later re-scheduled are NOT
+    ///         counted again, so this is a faithful lifetime inflow total.
+    /// @dev    Analytics only: no reward, claim, or solvency path reads it.
+    ///         `committedRewards` is the authoritative outstanding figure;
+    ///         `lifetimeRewardsReceived - lifetimeRewardsClaimed` is NOT live
+    ///         outstanding (it equals committed + parked). Slot reused from v1's
+    ///         `totalFeesDispatched`; the value is preserved at the upgrade (0 on
+    ///         the live proxy, so from migration onward this is a clean cumulative
+    ///         inflow counter). v1 maintained this slot as a net figure;
+    ///         StakingFinal counts gross inflow at ingestion instead.
+    uint256 public lifetimeRewardsReceived; // slot 4
 
     /// @notice Lifetime rewards claimed by stakers.
     /// @dev    Slot reused from v1's `totalRewardsClaimed`; pure rename, value preserved.
@@ -91,7 +100,7 @@ contract StakingFinal is
     /// @dev    Live outstanding balance, and the only accounting field read by
     ///         logic (`_availableForRewards`). Appended in this upgrade (was
     ///         reserved gap, reads 0 on the live proxy); seeded once in
-    ///         `reinitializePermit()` to `lifetimeRewardsScheduled - lifetimeRewardsClaimed`.
+    ///         `reinitializePermit()` to `lifetimeRewardsReceived - lifetimeRewardsClaimed`.
     uint256 public committedRewards; // slot 12 (new)
 
     // --- Events ---
@@ -157,13 +166,13 @@ contract StakingFinal is
     ///         1. initialises the ERC20Permit (EIP-712) domain that v1 never set; and
     ///         2. seeds the new `committedRewards` field (live outstanding) from the
     ///            preserved v1 counters. The two existing slots
-    ///            (`lifetimeRewardsScheduled` = v1 `totalFeesDispatched`,
+    ///            (`lifetimeRewardsReceived` = v1 `totalFeesDispatched`,
     ///            `lifetimeRewardsClaimed` = v1 `totalRewardsClaimed`) are left
     ///            untouched. Safe because claimed <= dispatched.
     function reinitializePermit() external onlyOwner reinitializer(2) {
         __ERC20Permit_init("Staked DUAL");
 
-        committedRewards = lifetimeRewardsScheduled - lifetimeRewardsClaimed; // outstanding = dispatched - claimed
+        committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed; // outstanding = dispatched - claimed
     }
 
     /// @notice Stake DUAL and receive xDUAL at a 1:1 rate.
@@ -403,11 +412,12 @@ contract StakingFinal is
     }
 
     function _replaceLeftoverRewards(uint256 leftover, uint256 scheduled) internal {
-        // `leftover` was already committed by the previous stream.
+        // `leftover` was already committed by the previous stream. Only the live
+        // committed pool moves here; lifetime inflow is counted once at ingestion
+        // (see `_ingestRewards`), so parked-then-rescheduled rewards are never
+        // double-counted.
         if (scheduled >= leftover) {
-            uint256 additional = scheduled - leftover;
-            committedRewards += additional;
-            lifetimeRewardsScheduled += additional;
+            committedRewards += scheduled - leftover;
         } else {
             committedRewards -= leftover - scheduled;
         }
@@ -490,6 +500,12 @@ contract StakingFinal is
     ///      is no supply yet OR the contract is paused; otherwise fold pending
     ///      rewards in and start/extend the stream.
     function _ingestRewards(uint256 amount) internal {
+        // Count every external reward inflow exactly once, at receipt — whether it
+        // is parked now or streamed immediately, and regardless of any later
+        // park / re-schedule. Keeps lifetimeRewardsReceived a true cumulative
+        // inflow total (no double-counting of recycled parked rewards).
+        lifetimeRewardsReceived += amount;
+
         if (totalSupply() == 0 || paused()) {
             _parkRewards(amount);
             return;

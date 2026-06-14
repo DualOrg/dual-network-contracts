@@ -175,7 +175,7 @@ contract StakingFinalInvariantTest is Test {
         staking.upgradeToAndCall(address(newImpl), abi.encodeCall(StakingFinal.reinitializePermit, ()));
 
         // Sanity: the post-upgrade invariants must already hold at the migrated state.
-        assertEq(staking.committedRewards(), staking.lifetimeRewardsScheduled() - staking.lifetimeRewardsClaimed());
+        assertEq(staking.committedRewards(), staking.lifetimeRewardsReceived() - staking.lifetimeRewardsClaimed());
         assertGe(
             address(staking).balance,
             staking.totalSupply() + staking.committedRewards() + staking.pendingRewards(),
@@ -213,7 +213,7 @@ contract StakingFinalInvariantTest is Test {
 
     /// @notice Lifetime claimed never exceeds lifetime scheduled.
     function invariant_claimsBounded() public view {
-        assertLe(staking.lifetimeRewardsClaimed(), staking.lifetimeRewardsScheduled(), "claimed > scheduled");
+        assertLe(staking.lifetimeRewardsClaimed(), staking.lifetimeRewardsReceived(), "claimed > scheduled");
     }
 
     /// @notice Native conservation across the v1 seed + v2 fuzz: balance == in − out.
