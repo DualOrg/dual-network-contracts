@@ -156,15 +156,20 @@ history along with the #003 fix and rename.)
   `committedRewards` is authoritative and that `lifetimeRewardsReceived -
   lifetimeRewardsClaimed` equals committed + parked, not live outstanding.
 
-  The migration seed is unaffected: it uses the value preserved at upgrade (v1's
-  net `totalFeesDispatched`), which is 0 on the live proxy, so from migration
-  onward the counter is a clean cumulative inflow figure starting at 0.
+  Migration seed: `committedRewards` is still seeded from the v1 *net* value
+  (`dispatched - claimed`, 0 on the live proxy) and is unchanged. The migration
+  additionally **re-bases** `lifetimeRewardsReceived` from v1's net figure to gross
+  by adding the parked `pendingRewards` (on the live proxy, the ~9.85M park), so the
+  counter starts at the true total ever received. Without this re-base the counter
+  would *under*-state by the pre-migration parked balance once it is claimed (and
+  `claimed` would exceed `received`); the invariant suite caught exactly this.
 
   Applied to both `StakingFinal` (in scope) and the canonical `Staking`. Tests:
   `test_LifetimeRewardsReceived_CountsInflowsOnce` (counter equals total external
   DUAL sent across a park-then-reschedule cycle, never more) in each suite, plus
   `_CountsFeesAndBonusOnce` and `_CountsParkedInflowAtReceipt` unit tests, and a new
-  `invariant_rewardInflowConserved` fuzz invariant on the canonical suite asserting
+  `invariant_rewardInflowConserved` fuzz invariant on **both** the canonical and the
+  migration suites asserting
   `lifetimeRewardsReceived - lifetimeRewardsClaimed == committedRewards + pendingRewards`.
 
   Note for the report: the §3.9.2 getter `lifetimeRewardsScheduled()` is now

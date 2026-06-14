@@ -89,7 +89,7 @@ contract StakingFinalTest is Test {
         StakingFinal s = _upgrade();
 
         // Renamed slots keep their exact values.
-        assertEq(s.lifetimeRewardsReceived(), dispatched, "slot4 value preserved");
+        assertEq(s.lifetimeRewardsReceived(), dispatched + pending, "slot4 re-based to gross received (net + parked)");
         assertEq(s.lifetimeRewardsClaimed(), claimed, "slot5 value preserved");
         // New field seeded to live-outstanding.
         assertEq(s.committedRewards(), dispatched - claimed, "committedRewards seeded");
@@ -305,7 +305,7 @@ contract StakingFinalTest is Test {
         assertEq(s.rewardsDuration(), liveDuration, "rewardsDuration preserved");
         assertEq(s.pendingRewards(), livePending, "pendingRewards preserved");
         assertEq(s.totalStaked(), liveStaked, "totalStaked preserved");
-        assertEq(s.lifetimeRewardsReceived(), liveDispatched, "scheduled preserved");
+        assertEq(s.lifetimeRewardsReceived(), liveDispatched + livePending, "received re-based to gross (net + parked)");
         assertEq(s.lifetimeRewardsClaimed(), liveClaimed, "claimed preserved");
         assertEq(s.committedRewards(), liveDispatched - liveClaimed, "committedRewards seeded");
         assertTrue(s.DOMAIN_SEPARATOR() != bytes32(0), "permit domain initialised");

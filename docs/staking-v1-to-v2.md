@@ -123,14 +123,18 @@ v2 decomposes the v1 inline streaming logic into named internal helpers:
 ```solidity
 function reinitializePermit() external onlyOwner reinitializer(2) {
     __ERC20Permit_init("Staked DUAL");
-    committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed;
+    committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed; // v1 NET value
+    lifetimeRewardsReceived += pendingRewards;                           // re-base net → gross
 }
 ```
 
 Runs **once**, atomically with the upgrade. It (a) initialises the ERC20Permit
-domain v1 never had, and (b) seeds the new `committedRewards` from the preserved
-v1 counters (`= totalFeesDispatched − totalRewardsClaimed`; safe because
-`claimed ≤ dispatched`). It mutates no existing slot.
+domain v1 never had; (b) seeds the new `committedRewards` from the preserved v1
+counters (`= totalFeesDispatched − totalRewardsClaimed`; safe because
+`claimed ≤ dispatched`); and (c) re-bases `lifetimeRewardsReceived` from v1's net
+figure to gross by adding the parked `pendingRewards`, so the inflow counter
+reflects every reward DUAL ever received (and `received − claimed == committed +
+parked` holds). Step (b) uses the net value and must run before (c).
 
 ---
 

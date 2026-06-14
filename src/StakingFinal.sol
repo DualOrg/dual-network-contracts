@@ -67,10 +67,10 @@ contract StakingFinal is
     ///         `committedRewards` is the authoritative outstanding figure;
     ///         `lifetimeRewardsReceived - lifetimeRewardsClaimed` is NOT live
     ///         outstanding (it equals committed + parked). Slot reused from v1's
-    ///         `totalFeesDispatched`; the value is preserved at the upgrade (0 on
-    ///         the live proxy, so from migration onward this is a clean cumulative
-    ///         inflow counter). v1 maintained this slot as a net figure;
-    ///         StakingFinal counts gross inflow at ingestion instead.
+    ///         `totalFeesDispatched`, which v1 kept NET of parked rewards; the
+    ///         migration re-bases it to gross (adds the parked `pendingRewards`,
+    ///         see `reinitializePermit`) and every later inflow is counted at
+    ///         ingestion, so it is a faithful cumulative gross-received total.
     uint256 public lifetimeRewardsReceived; // slot 4
 
     /// @notice Lifetime rewards claimed by stakers.
@@ -163,16 +163,24 @@ contract StakingFinal is
     /// @notice One-time migration run atomically with the upgrade of an existing proxy.
     /// @dev    Invoke via `upgradeToAndCall(newImpl, abi.encodeCall(
     ///         StakingFinal.reinitializePermit, ()))`. It:
-    ///         1. initialises the ERC20Permit (EIP-712) domain that v1 never set; and
+    ///         1. initialises the ERC20Permit (EIP-712) domain that v1 never set;
     ///         2. seeds the new `committedRewards` field (live outstanding) from the
-    ///            preserved v1 counters. The two existing slots
-    ///            (`lifetimeRewardsReceived` = v1 `totalFeesDispatched`,
-    ///            `lifetimeRewardsClaimed` = v1 `totalRewardsClaimed`) are left
-    ///            untouched. Safe because claimed <= dispatched.
+    ///            preserved v1 counters (`totalFeesDispatched - totalRewardsClaimed`),
+    ///            safe because claimed <= dispatched; and
+    ///         3. re-bases `lifetimeRewardsReceived` from v1's NET figure to GROSS
+    ///            received. v1 kept slot 4 net of parked rewards, so it excludes the
+    ///            currently-parked `pendingRewards` (on the live proxy, the ~9.85M
+    ///            park). Adding `pendingRewards` makes the counter equal every reward
+    ///            DUAL the contract has received, preserving the invariant
+    ///            `lifetimeRewardsReceived - lifetimeRewardsClaimed == committed + parked`.
     function reinitializePermit() external onlyOwner reinitializer(2) {
         __ERC20Permit_init("Staked DUAL");
 
-        committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed; // outstanding = dispatched - claimed
+        // Uses the v1 NET value still in slot 4 at this point: outstanding = dispatched - claimed.
+        committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed;
+        // Re-base slot 4 to gross received (net + currently-parked). MUST run after
+        // the committedRewards seed above, which relies on the net value.
+        lifetimeRewardsReceived += pendingRewards;
     }
 
     /// @notice Stake DUAL and receive xDUAL at a 1:1 rate.

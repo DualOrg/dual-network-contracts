@@ -98,21 +98,27 @@ Notes:
 ```solidity
 function reinitializePermit() external onlyOwner reinitializer(2) {
     __ERC20Permit_init("Staked DUAL");
-    committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed;
+    committedRewards = lifetimeRewardsReceived - lifetimeRewardsClaimed; // uses v1 NET value
+    lifetimeRewardsReceived += pendingRewards;                           // re-base net → gross
 }
 ```
 
-This does two things, atomically with the upgrade:
+This does three things, atomically with the upgrade:
 1. **Initialises the `ERC20Permit` (EIP-712) domain** that v1 never set (v1 did
    not inherit `ERC20Permit`).
 2. **Seeds the new `committedRewards` field** = "live outstanding rewards" =
-   `dispatched − claimed`. This is exact: v1's `totalFeesDispatched` always
+   `dispatched − claimed`. This is exact: v1's `totalFeesDispatched` (net) always
    equals `committedRewards + totalRewardsClaimed`, so
    `committedRewards = totalFeesDispatched − totalRewardsClaimed`. Safe because
-   `claimed ≤ dispatched` (no underflow).
+   `claimed ≤ dispatched` (no underflow). Must be computed **before** step 3.
+3. **Re-bases `lifetimeRewardsReceived` from net to gross** by adding the
+   currently-parked `pendingRewards`. v1 kept slot 4 net of parked rewards, so it
+   excludes the park (the ~9.85M on the live proxy). Without this the counter would
+   under-state once parked rewards are claimed; with it, the invariant
+   `received − claimed == committed + parked` holds from migration onward.
 
-It does **not** mutate any existing slot — slots 4 (`lifetimeRewardsReceived`)
-and 5 (`lifetimeRewardsClaimed`) keep their v1 values verbatim.
+It mutates slot 4 only by the one-time net→gross re-base above; slot 5
+(`lifetimeRewardsClaimed`) keeps its v1 value verbatim.
 
 ### 4. `stake()` — one extra line
 

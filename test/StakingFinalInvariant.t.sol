@@ -175,7 +175,12 @@ contract StakingFinalInvariantTest is Test {
         staking.upgradeToAndCall(address(newImpl), abi.encodeCall(StakingFinal.reinitializePermit, ()));
 
         // Sanity: the post-upgrade invariants must already hold at the migrated state.
-        assertEq(staking.committedRewards(), staking.lifetimeRewardsReceived() - staking.lifetimeRewardsClaimed());
+        // Reward inflow is conserved: received - claimed == committed + parked.
+        assertEq(
+            staking.lifetimeRewardsReceived() - staking.lifetimeRewardsClaimed(),
+            staking.committedRewards() + staking.pendingRewards(),
+            "migrated reward inflow not conserved"
+        );
         assertGe(
             address(staking).balance,
             staking.totalSupply() + staking.committedRewards() + staking.pendingRewards(),
@@ -211,9 +216,21 @@ contract StakingFinalInvariantTest is Test {
         assertLe(sumAccrued, staking.committedRewards(), "accrued exceeds committed pool");
     }
 
-    /// @notice Lifetime claimed never exceeds lifetime scheduled.
+    /// @notice Lifetime claimed never exceeds lifetime received.
     function invariant_claimsBounded() public view {
-        assertLe(staking.lifetimeRewardsClaimed(), staking.lifetimeRewardsReceived(), "claimed > scheduled");
+        assertLe(staking.lifetimeRewardsClaimed(), staking.lifetimeRewardsReceived(), "claimed > received");
+    }
+
+    /// @notice Reward-inflow conservation across the v1 seed + v2 fuzz (ChainSecurity
+    ///         #003): every reward DUAL received is claimed, committed, or parked.
+    ///         Holds because the migration re-bases the counter to gross received
+    ///         (net + parked), so it never under- or over-states.
+    function invariant_rewardInflowConserved() public view {
+        assertEq(
+            staking.lifetimeRewardsReceived() - staking.lifetimeRewardsClaimed(),
+            staking.committedRewards() + staking.pendingRewards(),
+            "reward inflow not conserved (received - claimed != committed + parked)"
+        );
     }
 
     /// @notice Native conservation across the v1 seed + v2 fuzz: balance == in − out.
