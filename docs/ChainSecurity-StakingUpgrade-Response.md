@@ -67,11 +67,13 @@ table should reflect the new getter name.
 
 Final commit including all modifications below:
 
-- **`cb60b95bc32e4267bb4857ce2178aae75cd74882`**
+- **`492bdda7c2583bd4b158e5e32bc772e78a69c753`**
 
-(Finding #005 — the `stake()` re-scheduling fix — landed earlier in
-`4e7cf3b6dc633fc0bbcacea5ff142984141bd0dd`; the commit above includes it in
-history along with the #003 fix and rename.)
+History: #005 (the `stake()` re-scheduling fix) landed in
+`4e7cf3b`; the #003 inflow-counter fix and rename in `cb60b95`; the #003
+migration-seed re-base in `492bdda`. The commit above is the tip and includes all
+of the above. Full `forge test` suite passes (382 passed, 1 skipped — the
+RPC-gated live-fork test).
 
 ---
 
@@ -174,7 +176,7 @@ history along with the #003 fix and rename.)
 
   Note for the report: the §3.9.2 getter `lifetimeRewardsScheduled()` is now
   `lifetimeRewardsReceived()`.
-- **Commit hash (if applicable)**: `cb60b95`
+- **Commit hash (if applicable)**: `cb60b95` (inflow-counter fix + rename) and `492bdda` (migration-seed net→gross re-base)
 
 ---
 
