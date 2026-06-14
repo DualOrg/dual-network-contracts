@@ -67,7 +67,11 @@ table should reflect the new getter name.
 
 Final commit including all modifications below:
 
-- **`4e7cf3b6dc633fc0bbcacea5ff142984141bd0dd`**
+- **`cb60b95bc32e4267bb4857ce2178aae75cd74882`**
+
+(Finding #005 — the `stake()` re-scheduling fix — landed earlier in
+`4e7cf3b6dc633fc0bbcacea5ff142984141bd0dd`; the commit above includes it in
+history along with the #003 fix and rename.)
 
 ---
 
@@ -165,7 +169,7 @@ Final commit including all modifications below:
 
   Note for the report: the §3.9.2 getter `lifetimeRewardsScheduled()` is now
   `lifetimeRewardsReceived()`.
-- **Commit hash (if applicable)**: `<pending — same follow-up commit>`
+- **Commit hash (if applicable)**: `cb60b95`
 
 ---
 
