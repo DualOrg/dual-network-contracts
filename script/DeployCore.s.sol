@@ -6,7 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 
 import {Vault} from "../src/Vault.sol";
 import {FeeDispatcher} from "../src/FeeDispatcher.sol";
-import {Staking} from "../src/Staking.sol";
+import {Staking} from "../src/StakingFinal.sol";
 import {Ledger} from "../src/Ledger.sol";
 
 /// @title DeployCore

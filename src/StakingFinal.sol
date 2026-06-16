@@ -15,17 +15,17 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/ut
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-/// @title StakingFinal
-/// @notice Upgrade implementation for the live Staking proxy. The reward/staking
-///         logic below is byte-for-byte identical to the canonical `Staking`
-///         contract; the only differences are storage bookkeeping required to
-///         preserve the deployed v1 slot layout, plus a one-time reinitializer
-///         that (a) wires up the ERC20Permit domain that v1 lacked and
+/// @title Staking
+/// @notice The native DUAL staking contract: an ERC-20 (xDUAL) minted 1:1 against
+///         staked DUAL that streams protocol fees to stakers. Deployed as the
+///         upgrade implementation for the live staking proxy, so its storage
+///         bookkeeping preserves the deployed v1 slot layout, and a one-time
+///         reinitializer (a) wires up the ERC20Permit domain that v1 lacked and
 ///         (b) converts the `committedRewards` slot from v1's cumulative
 ///         representation to the live-outstanding representation this logic uses.
 /// @dev    Storage layout for slots 0..11 is FROZEN to match deployed v1. New
 ///         state (`committedRewards`) is appended into the reserved gap.
-contract StakingFinal is
+contract Staking is
     Initializable,
     ERC20Upgradeable,
     ERC20PermitUpgradeable,
@@ -53,10 +53,10 @@ contract StakingFinal is
     /// @notice Per-user accrued but unclaimed DUAL rewards.
     mapping(address => uint256) public userAccruedRewards; // slot 2
 
-    /// @notice Total DUAL staked (principal only, excludes fee reserves). Leave it
-    ///         to keep the storage consistent with the deployed proxy; it mirrors
-    ///         `totalSupply()` (xDUAL is minted 1:1 with DUAL) and the core reward
-    ///         logic reads `totalSupply()`, exactly like the canonical contract.
+    /// @notice Total DUAL staked (principal only, excludes fee reserves). Retained
+    ///         to keep the storage layout consistent with the deployed proxy; it
+    ///         mirrors `totalSupply()` (xDUAL is minted 1:1 with DUAL), and the core
+    ///         reward logic reads `totalSupply()` rather than this field.
     uint256 public totalStaked; // slot 3
 
     /// @notice Cumulative external reward DUAL ingested — fees via `receive()` and
@@ -162,7 +162,7 @@ contract StakingFinal is
 
     /// @notice One-time migration run atomically with the upgrade of an existing proxy.
     /// @dev    Invoke via `upgradeToAndCall(newImpl, abi.encodeCall(
-    ///         StakingFinal.reinitializePermit, ()))`. It:
+    ///         Staking.reinitializePermit, ()))`. It:
     ///         1. initialises the ERC20Permit (EIP-712) domain that v1 never set;
     ///         2. seeds the new `committedRewards` field (live outstanding) from the
     ///            preserved v1 counters (`totalFeesDispatched - totalRewardsClaimed`),

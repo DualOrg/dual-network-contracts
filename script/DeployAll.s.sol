@@ -8,7 +8,7 @@ import {BatchRegistry} from "../src/BatchRegistry.sol";
 import {BridgedNFTs} from "../src/BridgedNFTs.sol";
 import {Ledger} from "../src/Ledger.sol";
 import {Vault} from "../src/Vault.sol";
-import {Staking} from "../src/Staking.sol";
+import {Staking} from "../src/StakingFinal.sol";
 import {FeeDispatcher} from "../src/FeeDispatcher.sol";
 
 /// @title DeployAll

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Script, console2} from "forge-std/Script.sol";
-import {StakingFinal} from "../src/StakingFinal.sol";
+import {Staking} from "../src/StakingFinal.sol";
 
 /// @dev Minimal view interface for the deployed v1 implementation, whose getters
 ///      use the pre-rename field names (`totalFeesDispatched`/`totalRewardsClaimed`)
@@ -19,7 +19,7 @@ interface IStakingV1Readout {
 }
 
 /// @notice Upgrades the live Staking UUPS proxy from the v1 implementation to
-///         `StakingFinal`, running `reinitializePermit()` atomically so the
+///         `Staking`, running `reinitializePermit()` atomically so the
 ///         proxy is never live with an uninitialised ERC20Permit domain or an
 ///         unseeded `committedRewards`.
 ///
@@ -45,7 +45,7 @@ contract UpgradeStaking is Script {
         IStakingV1Readout v1 = IStakingV1Readout(proxy);
         address currentOwner = v1.owner();
 
-        console2.log("=== Staking Upgrade (v1 -> StakingFinal) ===");
+        console2.log("=== Staking Upgrade (v1 -> Staking) ===");
         console2.log("Deployer            :", deployer);
         console2.log("Proxy               :", proxy);
         console2.log("Current owner       :", currentOwner);
@@ -66,18 +66,18 @@ contract UpgradeStaking is Script {
         vm.startBroadcast(deployer);
 
         // 1. Deploy the new implementation (constructor calls _disableInitializers).
-        StakingFinal newImpl = new StakingFinal();
+        Staking newImpl = new Staking();
         console2.log("New implementation  :", address(newImpl));
 
         // 2. Upgrade + initialise ERC20Permit + seed committedRewards, atomically.
-        StakingFinal(payable(proxy)).upgradeToAndCall(
-            address(newImpl), abi.encodeCall(StakingFinal.reinitializePermit, ())
+        Staking(payable(proxy)).upgradeToAndCall(
+            address(newImpl), abi.encodeCall(Staking.reinitializePermit, ())
         );
 
         vm.stopBroadcast();
 
         // Post-upgrade readback.
-        StakingFinal s = StakingFinal(payable(proxy));
+        Staking s = Staking(payable(proxy));
         console2.log("--- post-upgrade ---");
         console2.log("committedRewards         :", s.committedRewards());
         console2.log("lifetimeRewardsReceived :", s.lifetimeRewardsReceived());

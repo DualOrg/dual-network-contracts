@@ -7,7 +7,7 @@ import {Vault} from "../src/Vault.sol";
 import {FeeDispatcher} from "../src/FeeDispatcher.sol";
 import {BatchRegistry} from "../src/BatchRegistry.sol";
 import {Ledger} from "../src/Ledger.sol";
-import {Staking} from "../src/Staking.sol";
+import {Staking} from "../src/StakingFinal.sol";
 import {BridgedNFTs} from "../src/BridgedNFTs.sol";
 import {ILedger} from "../src/interfaces/ILedger.sol";
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
