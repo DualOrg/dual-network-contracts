@@ -42,10 +42,7 @@ contract DeployAll is Script {
         bytes32 fraudProofVKey = vm.envBytes32("FRAUD_PROOF_VKEY");
         bytes32 checkpointVKey = vm.envBytes32("CHECKPOINT_VKEY");
         uint256 challengeWindow = vm.envOr("CHALLENGE_WINDOW", uint256(5 minutes));
-        uint256 challengeBond = vm.envOr(
-            "CHALLENGE_BOND",
-            uint256(100_000 ether) // MIN_CHALLENGE_BOND
-        );
+        uint256 challengeBond = vm.envOr("CHALLENGE_BOND", uint256(100_000 ether));
         uint256 rewardsDuration = vm.envOr("REWARDS_DURATION", uint256(7 days));
         string memory nftBaseUri = vm.envString("NFT_BASE_URI");
 
@@ -164,6 +161,12 @@ contract DeployAll is Script {
         // 7c. Set FeeDispatcher in BatchRegistry
         console2.log("Setting FeeDispatcher in BatchRegistry...");
         BatchRegistry(payable(deployed.batchRegistry)).setFeeDispatcher(deployed.feeDispatcher);
+        BatchRegistry(payable(deployed.batchRegistry))
+            .reinitializeCheckpoints(
+                new bytes32[](0),
+                vm.envOr("MIN_CHALLENGE_BOND", challengeBond),
+                vm.envOr("MAX_CHECKPOINT_BATCHES", uint256(100))
+            );
 
         // 7d. Configure fee recipients in FeeDispatcher
         console2.log("Adding fee recipients...");

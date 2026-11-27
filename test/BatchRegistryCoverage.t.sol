@@ -130,11 +130,6 @@ contract BatchRegistryCoverageTest is Test {
             address(impl),
             abi.encodeCall(BatchRegistry.initialize, (owner, sequencer, address(verifier), FRAUD, CKPT, 0, BOND))
         );
-        vm.expectRevert(BatchRegistry.BondBelowMinimum.selector);
-        new ERC1967Proxy(
-            address(impl),
-            abi.encodeCall(BatchRegistry.initialize, (owner, sequencer, address(verifier), FRAUD, CKPT, WINDOW, 1 ether))
-        );
     }
 
     // ── commit / proof guards ─────────────────────────────────────────────────
@@ -238,17 +233,13 @@ contract BatchRegistryCoverageTest is Test {
 
     // ── checkpoint guards ─────────────────────────────────────────────────────
 
-    function test_RecordCheckpoint_Guards() public {
-        // endBatch unknown → InvalidInput
-        bytes memory pv = abi.encode(bytes32(0), keccak256("end"));
-        vm.expectRevert(BatchRegistry.InvalidInput.selector);
-        reg.recordCheckpoint("p", pv, "uri");
-
-        // endBatch exists but not finalized → NotFinalized
+    function test_RecordCheckpoint_Reverts() public {
         bytes32 bh = _commit(bytes32(0), keccak256("c"), 0);
-        bytes memory pv2 = abi.encode(bytes32(0), bh);
-        vm.expectRevert(BatchRegistry.NotFinalized.selector);
-        reg.recordCheckpoint("p", pv2, "uri");
+        skip(WINDOW + 1);
+        reg.finalizeBatch(bh);
+
+        vm.expectRevert(BatchRegistry.UseFinalizeCheckpoint.selector);
+        reg.recordCheckpoint("p", abi.encode(bytes32(0), bh), "uri");
     }
 
     // ── admin guards ──────────────────────────────────────────────────────────
@@ -265,6 +256,7 @@ contract BatchRegistryCoverageTest is Test {
 
         vm.expectRevert(BatchRegistry.InvalidInput.selector);
         reg.setChallengeConfig(0, BOND);
+        reg.setMinChallengeBond(2 ether);
         vm.expectRevert(BatchRegistry.BondBelowMinimum.selector);
         reg.setChallengeConfig(WINDOW, 1 ether);
 
@@ -325,7 +317,7 @@ contract BatchRegistryCoverageTest is Test {
         assertTrue(reg.getBatchInfo(bh).feeDispatched);
     }
 
-    // ── resolve guards + checkpoint success ───────────────────────────────────
+    // ── resolve guards ────────────────────────────────────────────────────────
 
     function test_Resolve_InvalidInputAndProof() public {
         // Unknown batch.
@@ -342,31 +334,6 @@ contract BatchRegistryCoverageTest is Test {
         bytes memory badPv = abi.encode(keccak256("x"), keccak256("y"), keccak256("root"));
         vm.expectRevert(BatchRegistry.InvalidProof.selector);
         reg.resolveChallenge(bh, "p", badPv);
-    }
-
-    function test_RecordCheckpoint_SuccessAndChain() public {
-        bytes32 bh = _commit(bytes32(0), keccak256("c"), 0);
-        skip(WINDOW + 1);
-        reg.finalizeBatch(bh);
-
-        bytes memory pv = abi.encode(bytes32(0), bh);
-        reg.recordCheckpoint("p", pv, "uri");
-        assertEq(reg.lastCheckpointBatchHash(), bh);
-
-        // Second checkpoint must chain from the previous end hash.
-        bytes32 bh2 = _commit(bh, keccak256("c2"), 0);
-        skip(WINDOW + 1);
-        reg.finalizeBatch(bh2);
-
-        // Wrong start hash → ChainBroken.
-        bytes memory badChain = abi.encode(keccak256("wrongstart"), bh2);
-        vm.expectRevert(BatchRegistry.ChainBroken.selector);
-        reg.recordCheckpoint("p", badChain, "uri");
-
-        // Correct chain.
-        bytes memory pv2 = abi.encode(bh, bh2);
-        reg.recordCheckpoint("p", pv2, "uri");
-        assertEq(reg.lastCheckpointBatchHash(), bh2);
     }
 
     // ── claim restore on failed send ──────────────────────────────────────────

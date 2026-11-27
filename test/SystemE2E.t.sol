@@ -118,6 +118,7 @@ contract SystemE2ETest is Test {
         dispatcher.addRecipient(payable(address(staking)), 5000); // 50% to stakers
         dispatcher.addRecipient(payable(address(fdTreasury)), 3000); // 30% to treasury (20% retained)
         registry.setFeeDispatcher(address(dispatcher));
+        registry.reinitializeCheckpoints(new bytes32[](0), 1 ether, 500);
         vm.stopPrank();
     }
 
@@ -147,6 +148,30 @@ contract SystemE2ETest is Test {
         vm.prank(sequencer);
         registry.commitBatchWithProof(prev, commitment, root, "proof", pv, "uri", fee);
         return sha256(abi.encodePacked(prev, commitment));
+    }
+
+    /// @dev Commits `k` optimistic batches with `fee` each and returns the hash of the last one.
+    function _commitOptimistic(uint256 k, uint256 fee) internal returns (bytes32 prev) {
+        for (uint256 i = 1; i <= k; i++) {
+            bytes32 commitment = keccak256(abi.encode("ob", i));
+            vm.prank(sequencer);
+            registry.commitBatch(prev, commitment, keccak256(abi.encode("root", i)), "uri", fee);
+            prev = sha256(abi.encodePacked(prev, commitment));
+        }
+    }
+
+    /// @dev Finalizes batches 1..k with one checkpoint and returns the gas of that call.
+    function _checkpointGas(uint256 k) internal returns (uint256) {
+        _stake(staker, 10 ether);
+        _vaultDeposit(k * 1 ether);
+        bytes32 end = _commitOptimistic(k, 1 ether);
+        bytes memory pv = abi.encode(bytes32(0), bytes32(0), end, keccak256(abi.encode("root", k)));
+        registry.finalizeCheckpoint(new bytes(260), pv, "ipfs://checkpoint");
+        uint256 gasUsed = vm.lastCallGas().gasTotalUsed;
+        assertEq(registry.highestFinalizedBatchNumber(), k);
+        assertEq(address(vault).balance, 0);
+        _assertConserved();
+        return gasUsed;
     }
 
     /// @dev Sum of all native held anywhere in the system + claimant wallets.
@@ -187,6 +212,29 @@ contract SystemE2ETest is Test {
         assertEq(staker.balance, claimed);
 
         _assertConserved();
+    }
+
+    // ── E2E: checkpoint finalization pays every batch fee ─────────────────────
+
+    function test_E2E_CheckpointFinalizesRangeAndDispatchesFees() public {
+        _checkpointGas(3);
+        // 3 fees of 1 ether: 50% to Staking, 30% to treasury, 20% retained.
+        assertEq(address(fdTreasury).balance, 0.9 ether);
+        assertEq(address(dispatcher).balance, 0.6 ether);
+        assertEq(address(staking).balance, 10 ether + 1.5 ether);
+    }
+
+    /// @dev Gas of finalizeCheckpoint with the real fee path; run with `--isolate` for cold-slot costs.
+    function test_Gas_FinalizeCheckpoint_1() public {
+        emit log_named_uint("finalizeCheckpoint gas, 1 batch", _checkpointGas(1));
+    }
+
+    function test_Gas_FinalizeCheckpoint_10() public {
+        emit log_named_uint("finalizeCheckpoint gas, 10 batches", _checkpointGas(10));
+    }
+
+    function test_Gas_FinalizeCheckpoint_100() public {
+        emit log_named_uint("finalizeCheckpoint gas, 100 batches", _checkpointGas(100));
     }
 
     // ── E2E: ledger-fee path ──────────────────────────────────────────────────

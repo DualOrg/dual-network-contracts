@@ -29,8 +29,6 @@ contract BatchRegistry is
         bool feeDispatched;
     }
 
-    uint256 public constant MIN_CHALLENGE_BOND = 100000 ether;
-
     uint256 public challengeWindow;
     uint256 public challengeBond;
     bool public haltOnFraud;
@@ -57,6 +55,14 @@ contract BatchRegistry is
     uint256 public totalPendingWithdrawals;
     mapping(bytes32 => uint256) public pendingFeeDispatch;
 
+    /// @notice Batch hash per batch number. Written at commit; the upgrade backfills the batches
+    ///         pending at upgrade time. Batches finalized before the upgrade have no entry.
+    mapping(uint256 => bytes32) public batchHashByNumber;
+    /// @notice Owner-set floor for `challengeBond`.
+    uint256 public minChallengeBond;
+    /// @notice Longest range (end batch number minus start batch number) one checkpoint may cover.
+    uint256 public maxCheckpointBatches;
+
     event BatchAnchored(
         uint256 indexed batchNumber,
         bytes32 indexed batchHash,
@@ -76,6 +82,8 @@ contract BatchRegistry is
     event FraudDetected(uint256 indexed batchNumber, address indexed challenger);
     event BatchFinalized(uint256 indexed batchNumber, bytes32 indexed batchHash);
 
+    /// @notice Phase A checkpoint, emitted by `recordCheckpoint` before the checkpoint upgrade.
+    ///         No longer emitted; kept so the ABI decodes the phase A logs.
     event CheckpointRecorded(
         bytes32 indexed startBatchHash,
         bytes32 indexed endBatchHash,
@@ -83,6 +91,23 @@ contract BatchRegistry is
         bytes32 proofHash,
         string dataUri
     );
+
+    /// @notice A validity checkpoint proved the range from `startBatchHash` to `endBatchHash`
+    ///         and finalized every batch of it that was not finalized yet.
+    event CheckpointFinalized(
+        bytes32 indexed startBatchHash,
+        bytes32 indexed endBatchHash,
+        uint256 batchNumber,
+        bytes32 proofHash,
+        string dataUri
+    );
+
+    /// @notice Emitted once by `reinitializeCheckpoints`: the first finalizing checkpoint starts at
+    ///         `startBatchHash`, the end of the last phase A checkpoint.
+    event FinalizingCheckpointsStarted(bytes32 indexed startBatchHash, uint256 startBatchNumber);
+
+    event MinChallengeBondUpdated(uint256 oldMinimum, uint256 newMinimum);
+    event MaxCheckpointBatchesUpdated(uint256 oldMaximum, uint256 newMaximum);
 
     event ChallengeConfigUpdated(uint256 oldWindow, uint256 newWindow, uint256 oldBond, uint256 newBond);
     event VKeysUpdated(bytes32 oldFraudKey, bytes32 newFraudKey, bytes32 oldCheckpointKey, bytes32 newCheckpointKey);
@@ -119,7 +144,9 @@ contract BatchRegistry is
     error BatchNotChallenged();
     error AlreadyChallenged();
     error AlreadyFinalized();
-    error NotFinalized();
+    error CheckpointRangeTooLong();
+    error CheckpointNotAtFinalized();
+    error UseFinalizeCheckpoint();
     error BondTooLow();
     error BondBelowMinimum();
     error ChainBroken();
@@ -156,7 +183,6 @@ contract BatchRegistry is
         if (_sequencer == address(0)) revert InvalidInput();
         if (_zkVerifier == address(0)) revert InvalidInput();
         if (_challengeWindow == 0) revert InvalidInput();
-        if (_challengeBond < MIN_CHALLENGE_BOND) revert BondBelowMinimum();
 
         __Ownable_init(_owner);
         __Ownable2Step_init();
@@ -171,6 +197,36 @@ contract BatchRegistry is
         challengeWindow = _challengeWindow;
         challengeBond = _challengeBond;
         haltOnFraud = true;
+    }
+
+    /// @notice Upgrade step to finalizing checkpoints. Run atomically through `upgradeToAndCall`
+    ///         (or once after `initialize` on a fresh deployment, with an empty list).
+    /// @dev    Requires the last phase A checkpoint to end at the highest finalized batch, so the
+    ///         first finalizing checkpoint starts there. Never calls `setCheckpointState`.
+    /// @param  pendingBatchHashes The hashes of every batch committed but not finalized, in batch
+    ///         number order (`highestFinalizedBatchNumber + 1` to `batchCount`).
+    /// @param  _minChallengeBond The challenge bond floor; `challengeBond` must not be below it.
+    /// @param  _maxCheckpointBatches The longest range one checkpoint may cover.
+    function reinitializeCheckpoints(
+        bytes32[] calldata pendingBatchHashes,
+        uint256 _minChallengeBond,
+        uint256 _maxCheckpointBatches
+    ) external onlyOwner reinitializer(2) {
+        uint256 finalized = highestFinalizedBatchNumber;
+        if (lastCheckpointBatchNumber != finalized || batches[lastCheckpointBatchHash].batchNumber != finalized) {
+            revert CheckpointNotAtFinalized();
+        }
+        if (pendingBatchHashes.length != batchCount - finalized) revert InvalidInput();
+        for (uint256 i = 0; i < pendingBatchHashes.length; i++) {
+            bytes32 batchHash = pendingBatchHashes[i];
+            if (batches[batchHash].batchNumber != finalized + 1 + i) revert InvalidInput();
+            batchHashByNumber[finalized + 1 + i] = batchHash;
+        }
+
+        setMinChallengeBond(_minChallengeBond);
+        setMaxCheckpointBatches(_maxCheckpointBatches);
+
+        emit FinalizingCheckpointsStarted(lastCheckpointBatchHash, finalized);
     }
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
@@ -254,6 +310,7 @@ contract BatchRegistry is
         });
 
         batchCount = batchNumber;
+        batchHashByNumber[batchNumber] = batchHash;
         lastBatchHash = batchHash;
         lastIntegrityRoot = integrityRoot;
 
@@ -413,27 +470,58 @@ contract BatchRegistry is
         emit WithdrawalClaimed(msg.sender, amount);
     }
 
-    function recordCheckpoint(bytes calldata proofBytes, bytes calldata publicValues, string calldata dataUri)
+    /// @notice Removed by the checkpoint upgrade; use `finalizeCheckpoint`.
+    function recordCheckpoint(bytes calldata, bytes calldata, string calldata) external pure {
+        revert UseFinalizeCheckpoint();
+    }
+
+    /// @notice Verifies a validity checkpoint proof and finalizes every batch of its range that is
+    ///         not finalized yet, in order, with fee dispatch. A challenge on a batch in the range is
+    ///         cleared and its bond credited to the sequencer, as `resolveChallenge` does when the
+    ///         sequencer was correct.
+    /// @param  publicValues `abi.encode(startHash, startIntegrityRoot, endHash, endIntegrityRoot)`.
+    ///         `startHash` must be `lastCheckpointBatchHash`; `endHash` a committed batch after it.
+    function finalizeCheckpoint(bytes calldata proofBytes, bytes calldata publicValues, string calldata dataUri)
         external
         nonReentrant
+        whenNotPaused
     {
         zkVerifier.verifyProof(checkpointVKey, publicValues, proofBytes);
 
-        (bytes32 startHash, bytes32 endHash) = abi.decode(publicValues, (bytes32, bytes32));
+        (bytes32 startHash, bytes32 startIntegrityRoot, bytes32 endHash, bytes32 endIntegrityRoot) =
+            abi.decode(publicValues, (bytes32, bytes32, bytes32, bytes32));
 
-        // First checkpoint allows any startHash; subsequent must chain.
-        if (lastCheckpointBatchHash != bytes32(0)) {
-            if (startHash != lastCheckpointBatchHash) revert ChainBroken();
-        }
+        if (startHash != lastCheckpointBatchHash) revert ChainBroken();
+        uint256 startNumber = lastCheckpointBatchNumber;
+        // Every batch the loop finalizes must lie inside the proved range.
+        if (startNumber > highestFinalizedBatchNumber) revert ChainBroken();
 
         BatchInfo storage endBatch = batches[endHash];
-        if (endBatch.timestamp == 0) revert InvalidInput();
-        if (!endBatch.isFinalized) revert NotFinalized();
+        uint256 endNumber = endBatch.batchNumber;
+        if (endBatch.timestamp == 0 || endNumber <= startNumber) revert InvalidInput();
+        if (endNumber - startNumber > maxCheckpointBatches) revert CheckpointRangeTooLong();
+        if (batches[startHash].integrityRoot != startIntegrityRoot) revert InvalidProof();
+        if (endBatch.integrityRoot != endIntegrityRoot) revert InvalidProof();
 
         lastCheckpointBatchHash = endHash;
-        lastCheckpointBatchNumber = endBatch.batchNumber;
+        lastCheckpointBatchNumber = endNumber;
 
-        emit CheckpointRecorded(startHash, endHash, endBatch.batchNumber, EfficientHashLib.hash(proofBytes), dataUri);
+        for (uint256 n = highestFinalizedBatchNumber + 1; n <= endNumber; n++) {
+            bytes32 batchHash = batchHashByNumber[n];
+            BatchInfo storage batch = batches[batchHash];
+            if (batch.isChallenged) {
+                uint256 bondAmount = batch.challengeBondAmount;
+                batch.isChallenged = false;
+                batch.challengeBondAmount = 0;
+                totalActiveBonds -= bondAmount;
+                pendingWithdrawals[sequencer] += bondAmount;
+                totalPendingWithdrawals += bondAmount;
+                emit ChallengeResolved(n, true, bondAmount);
+            }
+            _finalize(batchHash, n, batch.fee);
+        }
+
+        emit CheckpointFinalized(startHash, endHash, endNumber, EfficientHashLib.hash(proofBytes), dataUri);
     }
 
     function setVKeys(bytes32 _fraudKey, bytes32 _checkpointKey) external onlyOwner {
@@ -457,10 +545,24 @@ contract BatchRegistry is
 
     function setChallengeConfig(uint256 _window, uint256 _bond) external onlyOwner {
         if (_window == 0) revert InvalidInput();
-        if (_bond < MIN_CHALLENGE_BOND) revert BondBelowMinimum();
+        if (_bond < minChallengeBond) revert BondBelowMinimum();
         emit ChallengeConfigUpdated(challengeWindow, _window, challengeBond, _bond);
         challengeWindow = _window;
         challengeBond = _bond;
+    }
+
+    /// @notice Sets the challenge bond floor. The current `challengeBond` must not be below it.
+    function setMinChallengeBond(uint256 _minimum) public onlyOwner {
+        if (challengeBond < _minimum) revert BondBelowMinimum();
+        emit MinChallengeBondUpdated(minChallengeBond, _minimum);
+        minChallengeBond = _minimum;
+    }
+
+    /// @notice Sets the longest range one checkpoint may cover, the gas bound of `finalizeCheckpoint`.
+    function setMaxCheckpointBatches(uint256 _maximum) public onlyOwner {
+        if (_maximum == 0) revert InvalidInput();
+        emit MaxCheckpointBatchesUpdated(maxCheckpointBatches, _maximum);
+        maxCheckpointBatches = _maximum;
     }
 
     function setHaltOnFraud(bool _halt) external onlyOwner {
@@ -559,5 +661,5 @@ contract BatchRegistry is
 
     receive() external payable {}
 
-    uint256[33] private __gap;
+    uint256[30] private __gap;
 }

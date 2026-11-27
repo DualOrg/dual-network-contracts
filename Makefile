@@ -127,6 +127,12 @@ verify-upgrade-%: require-rpc require-private-key require-verifier-url
 	$(call require-script,upgrade-$*)
 	@forge script "$(SCRIPT_upgrade-$*)" $(COMMON_ARGS) $(PRIVATE_KEY_ARGS) $(BROADCAST_FLAGS) $(VERIFY_ARGS)
 
+# The BatchRegistry checkpoint upgrade is simulate-only here: the owner sends the logged
+# upgradeToAndCall calldata after review. Explicit rules override the pattern rules above.
+.PHONY: upgrade-batch-registry verify-upgrade-batch-registry
+upgrade-batch-registry verify-upgrade-batch-registry:
+	@echo "ERROR: the BatchRegistry upgrade only simulates; run make dry-run-upgrade-batch-registry (docs/DEPLOYMENT.md)"; exit 1
+
 .PHONY: dry-run-grant-sender-role grant-sender-role staking-info
 dry-run-grant-sender-role: require-rpc
 	forge script "$(SCRIPT_grant-sender-role)" $(COMMON_ARGS)
