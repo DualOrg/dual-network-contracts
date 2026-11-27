@@ -14,10 +14,14 @@ import {BatchRegistry} from "../src/BatchRegistry.sol";
 ///   MAX_CHECKPOINT_BATCHES       – longest range one checkpoint may cover
 ///
 /// Optional env vars:
-///   PENDING_BATCH_HASHES         – comma-separated hashes of every batch committed but not
-///                                  finalized, batch numbers highestFinalizedBatchNumber + 1 to
-///                                  batchCount, in order (unset when none); see docs/DEPLOYMENT.md
+///   PENDING_BATCH_HASHES         – comma-separated hashes of every batch after the last checkpoint,
+///                                  batch numbers lastCheckpointBatchNumber + 1 to batchCount, in
+///                                  order (unset when none); see docs/DEPLOYMENT.md
 ///   DEPLOYER_ADDRESS             – the proxy owner (defaults to msg.sender)
+///
+/// Run it only after the V4 cutover (`setCheckpointState(hash(N), batchNumber(N))`, spec 12.1
+/// step 6): the verifier accepts that rewrite only before the start event this upgrade emits, and
+/// `reinitializer(2)` cannot run again.
 ///
 /// Simulate only (`make dry-run-upgrade-batch-registry`). The Make broadcast targets for this
 /// upgrade refuse to run; the owner deploys the implementation and sends
@@ -34,6 +38,8 @@ contract UpgradeBatchRegistry is Script {
         require(registry.owner() == deployer, "UpgradeBatchRegistry: deployer is not proxy owner");
 
         console2.log("=== BatchRegistry Upgrade (finalizing checkpoints) ===");
+        console2.log("WARNING: run only after the V4 cutover setCheckpointState (spec 12.1 step 6);");
+        console2.log("         the start event is final and reinitializer(2) cannot run again.");
         console2.log("Proxy                       :", proxy);
         console2.log("Owner                       :", deployer);
         console2.log("batchCount                  :", registry.batchCount());
@@ -42,7 +48,7 @@ contract UpgradeBatchRegistry is Script {
         console2.log("lastCheckpointBatchHash     :");
         console2.logBytes32(registry.lastCheckpointBatchHash());
         console2.log("challengeBond               :", registry.challengeBond());
-        console2.log("pending batch hashes        :", pending.length);
+        console2.log("batch hashes to backfill    :", pending.length);
         console2.log("minChallengeBond            :", minChallengeBond);
         console2.log("maxCheckpointBatches        :", maxCheckpointBatches);
 

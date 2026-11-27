@@ -165,7 +165,11 @@ contract SystemE2ETest is Test {
         _stake(staker, 10 ether);
         _vaultDeposit(k * 1 ether);
         bytes32 end = _commitOptimistic(k, 1 ether);
-        bytes memory pv = abi.encode(bytes32(0), bytes32(0), end, keccak256(abi.encode("root", k)));
+        bytes memory roots;
+        for (uint256 i = 1; i <= k; i++) {
+            roots = bytes.concat(roots, keccak256(abi.encode("root", i)));
+        }
+        bytes memory pv = abi.encode(bytes32(0), bytes32(0), end, sha256(roots));
         registry.finalizeCheckpoint(new bytes(260), pv, "ipfs://checkpoint");
         uint256 gasUsed = vm.lastCallGas().gasTotalUsed;
         assertEq(registry.highestFinalizedBatchNumber(), k);

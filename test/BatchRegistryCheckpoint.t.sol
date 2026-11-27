@@ -4,13 +4,15 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
 import {BatchRegistry} from "../src/BatchRegistry.sol";
 import {BatchRegistryV1} from "../src/legacy/BatchRegistryV1.sol";
 import {IFeeDispatcher} from "../src/interfaces/IFeeDispatcher.sol";
 import {UpgradeBatchRegistry} from "../script/UpgradeBatchRegistry.s.sol";
 
-/// @dev Accepts every proof for the checkpoint key unless told to fail.
+/// @dev Accepts every proof for the checkpoint and fraud keys unless told to fail.
 contract CkptVerifier is ISP1Verifier {
     bool public shouldRevert;
 
@@ -20,7 +22,7 @@ contract CkptVerifier is ISP1Verifier {
 
     function verifyProof(bytes32 vkey, bytes calldata, bytes calldata) external view override {
         if (shouldRevert) revert("bad proof");
-        if (vkey != keccak256("ckpt")) revert("wrong vkey");
+        if (vkey != keccak256("ckpt") && vkey != keccak256("fraud")) revert("wrong vkey");
     }
 }
 
@@ -108,8 +110,17 @@ contract BatchRegistryCheckpointTest is Test {
         }
     }
 
+    /// @dev `sha256(root_{start+1} || ... || root_end)` over the honest roots.
+    function _digest(uint256 start, uint256 end) internal pure returns (bytes32) {
+        bytes memory roots;
+        for (uint256 n = start + 1; n <= end; n++) {
+            roots = bytes.concat(roots, _root(n));
+        }
+        return sha256(roots);
+    }
+
     function _pv(uint256 start, uint256 end) internal view returns (bytes memory) {
-        return abi.encode(hashes[start], _root(start), hashes[end], _root(end));
+        return abi.encode(hashes[start], _root(start), hashes[end], _digest(start, end));
     }
 
     // ── finalizeCheckpoint: effect ────────────────────────────────────────────
@@ -121,9 +132,11 @@ contract BatchRegistryCheckpointTest is Test {
             vm.expectEmit(true, true, false, false, address(reg));
             emit BatchFinalized(n, hashes[n]);
         }
+        bytes memory pv = _pv(0, 3);
+        vm.expectCall(address(verifier), abi.encodeCall(ISP1Verifier.verifyProof, (CKPT, pv, "p")));
         vm.expectEmit(true, true, false, true, address(reg));
         emit CheckpointFinalized(hashes[0], hashes[3], 3, keccak256("p"), "ckpt-uri");
-        reg.finalizeCheckpoint("p", _pv(0, 3), "ckpt-uri");
+        reg.finalizeCheckpoint("p", pv, "ckpt-uri");
 
         assertEq(reg.highestFinalizedBatchNumber(), 3);
         (bytes32 h, uint256 num) = reg.getLastCheckpoint();
@@ -212,8 +225,11 @@ contract BatchRegistryCheckpointTest is Test {
 
     function test_FinalizeCheckpoint_RevertsOnWrongStartHash() public {
         _commit(address(reg), 2);
-        vm.expectRevert(BatchRegistry.ChainBroken.selector);
-        reg.finalizeCheckpoint("p", _pv(1, 2), "uri");
+        {
+            bytes memory pv = _pv(1, 2);
+            vm.expectRevert(BatchRegistry.ChainBroken.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
     }
 
     function test_FinalizeCheckpoint_RevertsOnUnknownEndHash() public {
@@ -227,8 +243,11 @@ contract BatchRegistryCheckpointTest is Test {
         _commit(address(reg), 3);
         reg.finalizeCheckpoint("p", _pv(0, 2), "uri");
 
-        vm.expectRevert(BatchRegistry.InvalidInput.selector);
-        reg.finalizeCheckpoint("p", _pv(2, 2), "uri");
+        {
+            bytes memory pv = _pv(2, 2);
+            vm.expectRevert(BatchRegistry.InvalidInput.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
         vm.expectRevert(BatchRegistry.InvalidInput.selector);
         reg.finalizeCheckpoint("p", abi.encode(hashes[2], _root(2), hashes[1], _root(1)), "uri");
     }
@@ -236,35 +255,101 @@ contract BatchRegistryCheckpointTest is Test {
     function test_FinalizeCheckpoint_RevertsOnWrongStartIntegrityRoot() public {
         _commit(address(reg), 2);
         reg.finalizeCheckpoint("p", _pv(0, 1), "uri");
-        vm.expectRevert(BatchRegistry.InvalidProof.selector);
-        reg.finalizeCheckpoint("p", abi.encode(hashes[1], keccak256("wrong"), hashes[2], _root(2)), "uri");
+        {
+            bytes memory pv = abi.encode(hashes[1], keccak256("wrong"), hashes[2], _digest(1, 2));
+            vm.expectRevert(BatchRegistry.InvalidProof.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
     }
 
-    function test_FinalizeCheckpoint_RevertsOnWrongEndIntegrityRoot() public {
+    function test_FinalizeCheckpoint_RevertsOnWrongRootsDigest() public {
+        _commit(address(reg), 3);
+        // A digest that differs in the middle root, and one that leaves the end root out.
+        bytes32 wrongMiddle = sha256(abi.encodePacked(_root(1), keccak256("wrong"), _root(3)));
+        {
+            bytes memory pv = abi.encode(bytes32(0), bytes32(0), hashes[3], wrongMiddle);
+            vm.expectRevert(BatchRegistry.InvalidProof.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
+        {
+            bytes memory pv = abi.encode(bytes32(0), bytes32(0), hashes[3], _digest(0, 2));
+            vm.expectRevert(BatchRegistry.InvalidProof.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
+    }
+
+    /// @dev The sequencer anchored batch 2 with a root that the proof does not produce: the
+    ///      checkpoint over it reverts, and the challenge resolves as fraud.
+    function test_FinalizeCheckpoint_RevertsOnChallengedFraudBatchAndResolveDecides() public {
+        _commit(address(reg), 1);
+        bytes32 c2 = keccak256(abi.encode("c", uint256(2)));
+        vm.prank(sequencer);
+        reg.commitBatch(hashes[1], c2, keccak256("lie"), "uri", FEE);
+        hashes.push(sha256(abi.encodePacked(hashes[1], c2)));
+        vm.deal(challenger, BOND);
+        vm.prank(challenger);
+        reg.challengeBatch{value: BOND}(hashes[2]);
+
+        {
+            bytes memory pv = _pv(0, 2);
+            vm.expectRevert(BatchRegistry.InvalidProof.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
+        assertTrue(reg.getBatchInfo(hashes[2]).isChallenged);
+
+        reg.resolveChallenge(hashes[2], "p", abi.encode(hashes[1], c2, _root(2)));
+        assertEq(reg.pendingWithdrawals(challenger), BOND);
+        assertEq(reg.pendingWithdrawals(sequencer), 0);
+        assertFalse(reg.getBatchInfo(hashes[2]).isFinalized);
+        assertTrue(reg.paused());
+    }
+
+    function test_FinalizeCheckpoint_RevertsOnFinalizedBatchAboveTheTip() public {
         _commit(address(reg), 2);
-        vm.expectRevert(BatchRegistry.InvalidProof.selector);
-        reg.finalizeCheckpoint("p", abi.encode(bytes32(0), bytes32(0), hashes[2], keccak256("wrong")), "uri");
+        skip(WINDOW);
+        reg.finalizeBatch(hashes[1]);
+        reg.finalizeBatch(hashes[2]);
+        // An owner rewrite lowers the finalized tip below finalized batches.
+        vm.startPrank(owner);
+        reg.pause();
+        reg.setBatchState(hashes[2], _root(2), 0);
+        reg.unpause();
+        vm.stopPrank();
+        {
+            bytes memory pv = _pv(0, 2);
+            vm.expectRevert(BatchRegistry.ChainBroken.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
     }
 
     function test_FinalizeCheckpoint_RevertsAboveMaxCheckpointBatches() public {
         _commit(address(reg), MAX_BATCHES + 1);
-        vm.expectRevert(BatchRegistry.CheckpointRangeTooLong.selector);
-        reg.finalizeCheckpoint("p", _pv(0, MAX_BATCHES + 1), "uri");
+        {
+            bytes memory pv = _pv(0, MAX_BATCHES + 1);
+            vm.expectRevert(BatchRegistry.CheckpointRangeTooLong.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
     }
 
     function test_FinalizeCheckpoint_RevertsOnBadProof() public {
         _commit(address(reg), 1);
         verifier.setRevert(true);
-        vm.expectRevert(bytes("bad proof"));
-        reg.finalizeCheckpoint("p", _pv(0, 1), "uri");
+        {
+            bytes memory pv = _pv(0, 1);
+            vm.expectRevert(bytes("bad proof"));
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
     }
 
     function test_FinalizeCheckpoint_RevertsWhenPaused() public {
         _commit(address(reg), 1);
         vm.prank(owner);
         reg.pause();
-        vm.expectRevert();
-        reg.finalizeCheckpoint("p", _pv(0, 1), "uri");
+        {
+            bytes memory pv = _pv(0, 1);
+            vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
     }
 
     function test_FinalizeCheckpoint_RevertsWhenCheckpointAheadOfFinalized() public {
@@ -275,8 +360,11 @@ contract BatchRegistryCheckpointTest is Test {
         reg.setCheckpointState(hashes[2], 2);
         reg.unpause();
         vm.stopPrank();
-        vm.expectRevert(BatchRegistry.ChainBroken.selector);
-        reg.finalizeCheckpoint("p", _pv(2, 3), "uri");
+        {
+            bytes memory pv = _pv(2, 3);
+            vm.expectRevert(BatchRegistry.ChainBroken.selector);
+            reg.finalizeCheckpoint("p", pv, "uri");
+        }
     }
 
     function test_RecordCheckpoint_RevertsAfterUpgrade() public {
@@ -297,8 +385,12 @@ contract BatchRegistryCheckpointTest is Test {
         vm.expectRevert(BatchRegistry.BondBelowMinimum.selector);
         reg.setMinChallengeBond(BOND + 1); // above the current bond
 
+        vm.prank(owner);
+        vm.expectRevert(BatchRegistry.InvalidInput.selector);
+        reg.setMinChallengeBond(0);
+
         vm.prank(challenger);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, challenger));
         reg.setMinChallengeBond(1 ether);
     }
 
@@ -332,7 +424,7 @@ contract BatchRegistryCheckpointTest is Test {
         reg.setMaxCheckpointBatches(0);
 
         vm.prank(challenger);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, challenger));
         reg.setMaxCheckpointBatches(9);
     }
 
@@ -454,20 +546,44 @@ contract BatchRegistryCheckpointTest is Test {
         );
     }
 
-    function test_Upgrade_RefusesCheckpointBehindFinalized() public {
+    /// @dev Without a phase A checkpoint at the tip, the backfill starts after the last checkpoint
+    ///      and the first finalizing checkpoint proves the finalized batches again.
+    function test_Upgrade_CheckpointBehindFinalized() public {
         hashes = [bytes32(0)];
         BatchRegistryV1 v1 =
             BatchRegistryV1(payable(address(new ERC1967Proxy(address(new BatchRegistryV1()), _initDataV1()))));
+        vm.prank(owner);
+        v1.setFeeDispatcher(address(dispatcher));
         _commit(address(v1), 2);
         skip(WINDOW);
         v1.finalizeBatch(hashes[1]); // no phase A checkpoint reaches batch 1
 
-        address impl = address(new BatchRegistry());
-        vm.prank(owner);
-        vm.expectRevert(BatchRegistry.CheckpointNotAtFinalized.selector);
-        v1.upgradeToAndCall(
-            impl, abi.encodeCall(BatchRegistry.reinitializeCheckpoints, (_pending(2, 2), MIN_BOND, MAX_BATCHES))
-        );
+        vm.expectEmit(true, false, false, true, address(v1));
+        emit FinalizingCheckpointsStarted(bytes32(0), 0);
+        _upgrade(v1, _pending(1, 2));
+
+        BatchRegistry r = BatchRegistry(payable(address(v1)));
+        r.finalizeCheckpoint("p", _pv(0, 2), "uri");
+        assertEq(r.highestFinalizedBatchNumber(), 2);
+        assertEq(dispatcher.count(), 2); // batch 1 by the window, batch 2 by the checkpoint
+    }
+
+    function test_FinalizeCheckpoint_RevertsOnMissingBatchHashEntry() public {
+        hashes = [bytes32(0)];
+        BatchRegistryV1 v1 = _v1Proxy();
+        _upgrade(v1, _pending(3, 4));
+        BatchRegistry r = BatchRegistry(payable(address(v1)));
+        // An owner rewrite moves the checkpoint back to batch 1; batch 2 has no entry.
+        vm.startPrank(owner);
+        r.pause();
+        r.setCheckpointState(hashes[1], 1);
+        r.unpause();
+        vm.stopPrank();
+        {
+            bytes memory pv = _pv(1, 4);
+            vm.expectRevert(BatchRegistry.ChainBroken.selector);
+            r.finalizeCheckpoint("p", pv, "uri");
+        }
     }
 
     function test_Upgrade_RefusesFloorAboveBond() public {
@@ -489,7 +605,7 @@ contract BatchRegistryCheckpointTest is Test {
         BatchRegistry fresh =
             BatchRegistry(payable(address(new ERC1967Proxy(address(new BatchRegistry()), _initData()))));
         vm.prank(challenger);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, challenger));
         fresh.reinitializeCheckpoints(new bytes32[](0), MIN_BOND, MAX_BATCHES);
     }
 

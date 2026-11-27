@@ -56,7 +56,7 @@ contract BatchRegistry is
     mapping(bytes32 => uint256) public pendingFeeDispatch;
 
     /// @notice Batch hash per batch number. Written at commit; the upgrade backfills the batches
-    ///         pending at upgrade time. Batches finalized before the upgrade have no entry.
+    ///         after the last phase A checkpoint. Earlier batches have no entry.
     mapping(uint256 => bytes32) public batchHashByNumber;
     /// @notice Owner-set floor for `challengeBond`.
     uint256 public minChallengeBond;
@@ -103,7 +103,7 @@ contract BatchRegistry is
     );
 
     /// @notice Emitted once by `reinitializeCheckpoints`: the first finalizing checkpoint starts at
-    ///         `startBatchHash`, the end of the last phase A checkpoint.
+    ///         `startBatchHash` (`lastCheckpointBatchHash`), the end of the last phase A checkpoint.
     event FinalizingCheckpointsStarted(bytes32 indexed startBatchHash, uint256 startBatchNumber);
 
     event MinChallengeBondUpdated(uint256 oldMinimum, uint256 newMinimum);
@@ -145,7 +145,6 @@ contract BatchRegistry is
     error AlreadyChallenged();
     error AlreadyFinalized();
     error CheckpointRangeTooLong();
-    error CheckpointNotAtFinalized();
     error UseFinalizeCheckpoint();
     error BondTooLow();
     error BondBelowMinimum();
@@ -201,32 +200,29 @@ contract BatchRegistry is
 
     /// @notice Upgrade step to finalizing checkpoints. Run atomically through `upgradeToAndCall`
     ///         (or once after `initialize` on a fresh deployment, with an empty list).
-    /// @dev    Requires the last phase A checkpoint to end at the highest finalized batch, so the
-    ///         first finalizing checkpoint starts there. Never calls `setCheckpointState`.
-    /// @param  pendingBatchHashes The hashes of every batch committed but not finalized, in batch
-    ///         number order (`highestFinalizedBatchNumber + 1` to `batchCount`).
+    /// @dev    The first finalizing checkpoint starts at `lastCheckpointBatchHash`, the end of the last
+    ///         phase A checkpoint. Never calls `setCheckpointState`.
+    /// @param  batchHashes The hashes of every batch after the last checkpoint, in batch number
+    ///         order (`lastCheckpointBatchNumber + 1` to `batchCount`).
     /// @param  _minChallengeBond The challenge bond floor; `challengeBond` must not be below it.
     /// @param  _maxCheckpointBatches The longest range one checkpoint may cover.
     function reinitializeCheckpoints(
-        bytes32[] calldata pendingBatchHashes,
+        bytes32[] calldata batchHashes,
         uint256 _minChallengeBond,
         uint256 _maxCheckpointBatches
     ) external onlyOwner reinitializer(2) {
-        uint256 finalized = highestFinalizedBatchNumber;
-        if (lastCheckpointBatchNumber != finalized || batches[lastCheckpointBatchHash].batchNumber != finalized) {
-            revert CheckpointNotAtFinalized();
-        }
-        if (pendingBatchHashes.length != batchCount - finalized) revert InvalidInput();
-        for (uint256 i = 0; i < pendingBatchHashes.length; i++) {
-            bytes32 batchHash = pendingBatchHashes[i];
-            if (batches[batchHash].batchNumber != finalized + 1 + i) revert InvalidInput();
-            batchHashByNumber[finalized + 1 + i] = batchHash;
+        uint256 start = lastCheckpointBatchNumber;
+        if (batchHashes.length != batchCount - start) revert InvalidInput();
+        for (uint256 i = 0; i < batchHashes.length; i++) {
+            bytes32 batchHash = batchHashes[i];
+            if (batches[batchHash].batchNumber != start + 1 + i) revert InvalidInput();
+            batchHashByNumber[start + 1 + i] = batchHash;
         }
 
         setMinChallengeBond(_minChallengeBond);
         setMaxCheckpointBatches(_maxCheckpointBatches);
 
-        emit FinalizingCheckpointsStarted(lastCheckpointBatchHash, finalized);
+        emit FinalizingCheckpointsStarted(lastCheckpointBatchHash, start);
     }
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
@@ -475,12 +471,16 @@ contract BatchRegistry is
         revert UseFinalizeCheckpoint();
     }
 
-    /// @notice Verifies a validity checkpoint proof and finalizes every batch of its range that is
-    ///         not finalized yet, in order, with fee dispatch. A challenge on a batch in the range is
-    ///         cleared and its bond credited to the sequencer, as `resolveChallenge` does when the
-    ///         sequencer was correct.
-    /// @param  publicValues `abi.encode(startHash, startIntegrityRoot, endHash, endIntegrityRoot)`.
-    ///         `startHash` must be `lastCheckpointBatchHash`; `endHash` a committed batch after it.
+    /// @notice Verifies a validity checkpoint proof over the batch range (start, end] and finalizes
+    ///         every batch of it that is not finalized yet, in order, with fee dispatch. A challenge
+    ///         on a batch in the range is cleared and its bond credited to the sequencer, as
+    ///         `resolveChallenge` does when the sequencer was correct.
+    /// @param  publicValues `abi.encode(startHash, startIntegrityRoot, endHash, rootsDigest)`.
+    ///         `startHash` is the `prev_hash` of the first proved batch and must be
+    ///         `lastCheckpointBatchHash`; `startIntegrityRoot` is that batch's `prev_root`, the stored
+    ///         root of the start batch. `endHash` is the last proved batch. `rootsDigest` is
+    ///         `sha256(integrityRoot_{start+1} || ... || integrityRoot_end)`, 32 bytes per batch in
+    ///         batch number order; it binds every stored root of the range.
     function finalizeCheckpoint(bytes calldata proofBytes, bytes calldata publicValues, string calldata dataUri)
         external
         nonReentrant
@@ -488,27 +488,36 @@ contract BatchRegistry is
     {
         zkVerifier.verifyProof(checkpointVKey, publicValues, proofBytes);
 
-        (bytes32 startHash, bytes32 startIntegrityRoot, bytes32 endHash, bytes32 endIntegrityRoot) =
+        (bytes32 startHash, bytes32 startIntegrityRoot, bytes32 endHash, bytes32 rootsDigest) =
             abi.decode(publicValues, (bytes32, bytes32, bytes32, bytes32));
 
         if (startHash != lastCheckpointBatchHash) revert ChainBroken();
         uint256 startNumber = lastCheckpointBatchNumber;
+        uint256 finalized = highestFinalizedBatchNumber;
         // Every batch the loop finalizes must lie inside the proved range.
-        if (startNumber > highestFinalizedBatchNumber) revert ChainBroken();
+        if (startNumber > finalized) revert ChainBroken();
 
         BatchInfo storage endBatch = batches[endHash];
         uint256 endNumber = endBatch.batchNumber;
         if (endBatch.timestamp == 0 || endNumber <= startNumber) revert InvalidInput();
         if (endNumber - startNumber > maxCheckpointBatches) revert CheckpointRangeTooLong();
         if (batches[startHash].integrityRoot != startIntegrityRoot) revert InvalidProof();
-        if (endBatch.integrityRoot != endIntegrityRoot) revert InvalidProof();
+
+        bytes32[] memory roots = new bytes32[](endNumber - startNumber);
+        for (uint256 n = startNumber + 1; n <= endNumber; n++) {
+            bytes32 batchHash = batchHashByNumber[n];
+            if (batchHash == bytes32(0)) revert ChainBroken();
+            roots[n - startNumber - 1] = batches[batchHash].integrityRoot;
+        }
+        if (EfficientHashLib.sha2(abi.encodePacked(roots)) != rootsDigest) revert InvalidProof();
 
         lastCheckpointBatchHash = endHash;
         lastCheckpointBatchNumber = endNumber;
 
-        for (uint256 n = highestFinalizedBatchNumber + 1; n <= endNumber; n++) {
+        for (uint256 n = finalized + 1; n <= endNumber; n++) {
             bytes32 batchHash = batchHashByNumber[n];
             BatchInfo storage batch = batches[batchHash];
+            if (batch.isFinalized) revert ChainBroken();
             if (batch.isChallenged) {
                 uint256 bondAmount = batch.challengeBondAmount;
                 batch.isChallenged = false;
@@ -553,6 +562,7 @@ contract BatchRegistry is
 
     /// @notice Sets the challenge bond floor. The current `challengeBond` must not be below it.
     function setMinChallengeBond(uint256 _minimum) public onlyOwner {
+        if (_minimum == 0) revert InvalidInput();
         if (challengeBond < _minimum) revert BondBelowMinimum();
         emit MinChallengeBondUpdated(minChallengeBond, _minimum);
         minChallengeBond = _minimum;
