@@ -47,7 +47,7 @@ The current suite does not explicitly test UUPS upgrade authorization and state
 preservation, repeated initialization attempts, or the two-step ownership
 transfer lifecycle, except the BatchRegistry checkpoint upgrade
 (`test/BatchRegistryCheckpoint.t.sol`: slot-by-slot preservation from
-`src/legacy/BatchRegistryV1.sol`, run-once reinitializer) and the Staking upgrade. `Vault` combines ownership with `AccessControl`; ownership
+`test/legacy/BatchRegistryV1.sol`, run-once reinitializer) and the Staking upgrade. `Vault` combines ownership with `AccessControl`; ownership
 transfers do not automatically move `DEFAULT_ADMIN_ROLE`. `Ledger` uses
 `AccessControl` for `SENDER_ROLE`, but grants no `DEFAULT_ADMIN_ROLE`; its
 owner-only wrapper manages sender-role grants.

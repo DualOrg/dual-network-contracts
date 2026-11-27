@@ -82,4 +82,4 @@ Direct upgrade scripts currently exist for `BatchRegistry`, `FeeDispatcher`, and
 
 Every direct upgrade script requires `DEPLOYER_ADDRESS` to be the current proxy owner. Always review storage-layout compatibility before upgrading to a changed implementation.
 
-The BatchRegistry checkpoint upgrade (`reinitializeCheckpoints`) only simulates through Make; see [DEPLOYMENT.md](DEPLOYMENT.md#batchregistry-checkpoint-upgrade). `src/legacy/BatchRegistryV1.sol` is the implementation before it, used by the upgrade tests.
+The BatchRegistry checkpoint upgrade (`reinitializeCheckpoints`) only simulates through Make; see [DEPLOYMENT.md](DEPLOYMENT.md#batchregistry-checkpoint-upgrade). `test/legacy/BatchRegistryV1.sol` is the implementation before it, used by the upgrade tests.

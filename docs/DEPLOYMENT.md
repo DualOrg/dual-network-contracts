@@ -71,7 +71,7 @@ Verification targets broadcast and verify in one command. Set `VERIFIER_URL`; ad
 
 Each has `dry-run-` and `verify-` variants. The broadcasting deployer must be the proxy owner. `upgrade-batch-registry` and `verify-upgrade-batch-registry` refuse to run: the BatchRegistry checkpoint upgrade only simulates (below).
 
-A fresh BatchRegistry (`DeployBatchRegistry`) needs one owner call after deployment: `reinitializeCheckpoints([], minChallengeBond, maxCheckpointBatches)`. `DeployAll` makes it, with `MIN_CHALLENGE_BOND` (default: the challenge bond) and `MAX_CHECKPOINT_BATCHES` (default `100`).
+A fresh BatchRegistry from the standalone `DeployBatchRegistry` script must get one owner call after deployment: `reinitializeCheckpoints([], minChallengeBond, maxCheckpointBatches)`. Until then `minChallengeBond` and `maxCheckpointBatches` are `0`: `setChallengeConfig` accepts any bond and every `finalizeCheckpoint` reverts with `CheckpointRangeTooLong`. `DeployAll` makes the call itself, with `MIN_CHALLENGE_BOND` (default: the challenge bond) and `MAX_CHECKPOINT_BATCHES` (default `100`).
 
 ### BatchRegistry checkpoint upgrade
 

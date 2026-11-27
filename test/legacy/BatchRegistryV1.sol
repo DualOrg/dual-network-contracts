@@ -8,7 +8,7 @@ import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Ini
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
 import {EfficientHashLib} from "@solady/utils/EfficientHashLib.sol";
-import {IFeeDispatcher} from "../interfaces/IFeeDispatcher.sol";
+import {IFeeDispatcher} from "../../src/interfaces/IFeeDispatcher.sol";
 
 /// @title BatchRegistryV1 (the implementation before the checkpoint upgrade, b1bdbbe — reference for upgrade tests)
 contract BatchRegistryV1 is

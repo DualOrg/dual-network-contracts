@@ -8,7 +8,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
 import {BatchRegistry} from "../src/BatchRegistry.sol";
-import {BatchRegistryV1} from "../src/legacy/BatchRegistryV1.sol";
+import {BatchRegistryV1} from "./legacy/BatchRegistryV1.sol";
 import {IFeeDispatcher} from "../src/interfaces/IFeeDispatcher.sol";
 import {UpgradeBatchRegistry} from "../script/UpgradeBatchRegistry.s.sol";
 
