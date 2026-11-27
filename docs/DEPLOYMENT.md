@@ -80,7 +80,8 @@ The upgrade replaces the constant `MIN_CHALLENGE_BOND` with an owner-set floor, 
 Run it only after the V4 cutover, `setCheckpointState(hash(N), batchNumber(N))` in protocol V4 spec 12.1 step 6. The verifier reads the registry log from the cutover block and accepts the one `CheckpointStateRewritten` only before the start event that this upgrade emits; `reinitializer(2)` cannot run again. The first finalizing checkpoint starts at `lastCheckpointBatchHash()`, so it also proves the batches that the window finalized since the last phase A checkpoint.
 
 1. `pause()` the registry (owner). This stops commits, challenges and window finalization while the state is read.
-2. Collect the batch hashes read-only. With `L = lastCheckpointBatchNumber()`, `C = batchCount()` and `FROM_BLOCK` at or before the anchoring of batch `L + 1`:
+2. Optional, when `batchCount() - lastCheckpointBatchNumber()` is above about 1,000: first record one phase A checkpoint with the old checkpoint program (`recordCheckpoint`, not blocked by the pause) from `lastCheckpointBatchHash()` to the hash of batch `highestFinalizedBatchNumber()`. The upgrade transaction writes one backfill entry (about 25,000 gas) per batch after the last checkpoint, so about 1,000 entries fit under a 32M block gas limit (the Nitro default, not checked on chain 6300).
+3. Collect the batch hashes read-only. With `L = lastCheckpointBatchNumber()`, `C = batchCount()` and `FROM_BLOCK` at or before the anchoring of batch `L + 1`:
 
    ```shell
    SIG='BatchAnchored(uint256 indexed,bytes32 indexed,bytes32 indexed,bytes32,bytes32,bytes32,string,uint256,bool)'
@@ -91,18 +92,18 @@ Run it only after the V4 cutover, `setCheckpointState(hash(N), batchNumber(N))` 
    ```
 
    The result is `PENDING_BATCH_HASHES` (empty when `L == C`). `getBatchInfo(hash).batchNumber` must equal `n` for each one; the initializer refuses the list otherwise.
-3. Simulate:
+4. Simulate:
 
    ```shell
    BATCH_REGISTRY_PROXY_ADDRESS=0x... DEPLOYER_ADDRESS=<owner> PENDING_BATCH_HASHES=0x...,0x... \
    MIN_CHALLENGE_BOND=<wei> MAX_CHECKPOINT_BATCHES=100 make dry-run-upgrade-batch-registry
    ```
 
-   The script logs the `data` argument of `upgradeToAndCall`.
-4. Deploy the implementation (`src/BatchRegistry.sol:BatchRegistry`), compare its storage layout with `forge inspect BatchRegistry storageLayout`, and send `upgradeToAndCall(implementation, data)` from the owner.
-5. Check `minChallengeBond()`, `maxCheckpointBatches()`, `batchHashByNumber(n)` for each pending batch, and the `FinalizingCheckpointsStarted` event: its start hash equals `lastCheckpointBatchHash()`.
-6. Lower the bond to its new value with `setChallengeConfig(window, bond)` (bond at or above the floor). Register the finalizing checkpoint program key with `setVKeys` before the first `finalizeCheckpoint`.
-7. `unpause()`.
+   The script logs the `data` argument of `upgradeToAndCall`. Read the simulated gas of `upgradeToAndCall` before sending; it must stay well below the block gas limit.
+5. Deploy the implementation (`src/BatchRegistry.sol:BatchRegistry`), compare its storage layout with `forge inspect BatchRegistry storageLayout`, and send `upgradeToAndCall(implementation, data)` from the owner.
+6. Check `minChallengeBond()`, `maxCheckpointBatches()`, `batchHashByNumber(n)` for each pending batch, and the `FinalizingCheckpointsStarted` event: its start hash equals `lastCheckpointBatchHash()`.
+7. Lower the bond to its new value with `setChallengeConfig(window, bond)` (bond at or above the floor). Register the finalizing checkpoint program key with `setVKeys` before the first `finalizeCheckpoint`.
+8. `unpause()`.
 
 For a multisig-controlled Ledger, deploy a new implementation with `make deploy-ledger-impl`, review its address and bytecode, then execute `upgradeToAndCall(newImplementation, "")` from the multisig.
 
