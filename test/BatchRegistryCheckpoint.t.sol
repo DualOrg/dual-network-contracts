@@ -221,6 +221,39 @@ contract BatchRegistryCheckpointTest is Test {
         assertTrue(reg.isBatchFinalized(hashes[1]));
     }
 
+    /// @dev The C4 checkpoint test vector (smarttoken services/proofs/testdata/checkpoint-v4/vector.json):
+    ///      a fresh deployment, two V4 mint batches, one checkpoint over (0, 2]. The program and the
+    ///      contract must agree on these bytes.
+    function test_FinalizeCheckpoint_C4Vector() public {
+        bytes32 c1 = 0x7288c2f59c9f90ff0efa49d34d77972f735bffd43d9f2ac2c71305f172b035f8;
+        bytes32 r1 = 0xabb532076137fa26ea9e3c38cc02a4575bfd827bcceadd3f186b654da23f7c5e;
+        bytes32 h1 = 0x0681054a910ddf7bc0c17e49af468093d0636b87d6836b43973a372b29ae7960;
+        bytes32 c2 = 0x2851663fb8e2d1ddaa6f00ebc9dd80bc7c8648eb5f94f9a3c946268dc057143c;
+        bytes32 r2 = 0x2d2bafbe45cc5531d13f26efcf08a0d6ddf538b2edb2e6a6a9b6934de4afdd20;
+        bytes32 h2 = 0xcd110cafc1aff2fac10f3ffd2c93ccf6790d46664ae3b96de2c2d5625a059ab9;
+        bytes memory pv =
+            hex"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000cd110cafc1aff2fac10f3ffd2c93ccf6790d46664ae3b96de2c2d5625a059ab972a42af0875ef69720b84a1556b18f8d56473a963339827c7666ec228279cf96";
+
+        vm.startPrank(sequencer);
+        reg.commitBatch(bytes32(0), c1, r1, "uri", FEE);
+        reg.commitBatch(h1, c2, r2, "uri", FEE);
+        vm.stopPrank();
+        assertEq(reg.batchHashByNumber(1), h1);
+        assertEq(reg.batchHashByNumber(2), h2);
+
+        // A one-byte change of rootsDigest (the last byte) reverts.
+        bytes memory bad = bytes.concat(pv);
+        bad[127] = bytes1(uint8(bad[127]) ^ 0x01);
+        vm.expectRevert(BatchRegistry.InvalidProof.selector);
+        reg.finalizeCheckpoint("p", bad, "uri");
+
+        reg.finalizeCheckpoint("p", pv, "uri");
+        assertTrue(reg.isBatchFinalized(h1));
+        assertTrue(reg.isBatchFinalized(h2));
+        assertEq(reg.lastCheckpointBatchHash(), h2);
+        assertEq(reg.highestFinalizedBatchNumber(), 2);
+    }
+
     // ── finalizeCheckpoint: refusals ──────────────────────────────────────────
 
     function test_FinalizeCheckpoint_RevertsOnWrongStartHash() public {
