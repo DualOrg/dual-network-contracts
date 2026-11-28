@@ -94,6 +94,22 @@ contract BatchRegistryHandler is Test {
         try reg.finalizeBatch(bh) {} catch {}
     }
 
+    /// @dev An honest checkpoint from the last checkpoint to a committed batch (mock verifier).
+    function checkpoint(uint256 endSeed) public {
+        uint256 start = reg.lastCheckpointBatchNumber();
+        if (hashes.length <= start) return;
+        uint256 maxEnd = start + reg.maxCheckpointBatches();
+        if (maxEnd > hashes.length) maxEnd = hashes.length;
+        uint256 end = bound(endSeed, start + 1, maxEnd);
+        bytes memory roots;
+        for (uint256 n = start + 1; n <= end; n++) {
+            roots = bytes.concat(roots, metas[hashes[n - 1]].root);
+        }
+        bytes32 startHash = reg.lastCheckpointBatchHash();
+        bytes memory pv = abi.encode(startHash, metas[startHash].root, hashes[end - 1], sha256(roots));
+        try reg.finalizeCheckpoint("proof", pv, "uri") {} catch {}
+    }
+
     function claim(uint256 userSeed) public {
         address u = users[bound(userSeed, 0, 2)];
         vm.prank(u);
@@ -173,6 +189,7 @@ contract BatchRegistryInvariantTest is Test {
         vm.startPrank(address(handler));
         reg.setHaltOnFraud(false);
         reg.setFeeDispatcher(address(dispatcher));
+        reg.reinitializeCheckpoints(new bytes32[](0), CHALLENGE_BOND, 20);
         vm.stopPrank();
 
         targetContract(address(handler));
@@ -193,6 +210,11 @@ contract BatchRegistryInvariantTest is Test {
     ///         backed by the contract balance.
     function invariant_solvency() public view {
         assertGe(address(reg).balance, reg.totalActiveBonds() + reg.totalPendingWithdrawals(), "under-collateralized");
+    }
+
+    /// @notice A checkpoint never ends past the finalized tip.
+    function invariant_checkpointNotAheadOfFinalized() public view {
+        assertLe(reg.lastCheckpointBatchNumber(), reg.highestFinalizedBatchNumber(), "checkpoint ahead");
     }
 
     /// @notice The pending-withdrawals total equals the sum of per-account

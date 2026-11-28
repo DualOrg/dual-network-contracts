@@ -69,7 +69,41 @@ Verification targets broadcast and verify in one command. Set `VERIFIER_URL`; ad
 | `upgrade-fee-dispatcher` | `FEE_DISPATCHER_PROXY_ADDRESS` |
 | `upgrade-bridged-nfts` | `BRIDGED_NFTS_PROXY_ADDRESS` |
 
-Each has `dry-run-` and `verify-` variants. The broadcasting deployer must be the proxy owner.
+Each has `dry-run-` and `verify-` variants. The broadcasting deployer must be the proxy owner. `upgrade-batch-registry` and `verify-upgrade-batch-registry` refuse to run: the BatchRegistry checkpoint upgrade only simulates (below).
+
+A fresh BatchRegistry from the standalone `DeployBatchRegistry` script must get one owner call after deployment: `reinitializeCheckpoints([], minChallengeBond, maxCheckpointBatches)`. Until then `minChallengeBond` and `maxCheckpointBatches` are `0`: `setChallengeConfig` accepts any bond and every `finalizeCheckpoint` reverts with `CheckpointRangeTooLong`. `DeployAll` makes the call itself, with `MIN_CHALLENGE_BOND` (default: the challenge bond) and `MAX_CHECKPOINT_BATCHES` (default `100`).
+
+### BatchRegistry checkpoint upgrade
+
+The upgrade replaces the constant `MIN_CHALLENGE_BOND` with an owner-set floor, adds `finalizeCheckpoint` and makes `recordCheckpoint` revert. `reinitializeCheckpoints` runs atomically in `upgradeToAndCall` and needs the hash of every batch after the last checkpoint.
+
+Run it only after the V4 cutover, `setCheckpointState(hash(N), batchNumber(N))` in protocol V4 spec 12.1 step 6. The verifier reads the registry log from the cutover block and accepts the one `CheckpointStateRewritten` only before the start event that this upgrade emits; `reinitializer(2)` cannot run again. The first finalizing checkpoint starts at `lastCheckpointBatchHash()`, so it also proves the batches that the window finalized since the last phase A checkpoint.
+
+1. `pause()` the registry (owner). This stops commits, challenges and window finalization while the state is read.
+2. Optional, when `batchCount() - lastCheckpointBatchNumber()` is above about 1,000: first record one phase A checkpoint with the old checkpoint program (`recordCheckpoint`, not blocked by the pause) from `lastCheckpointBatchHash()` to the hash of batch `highestFinalizedBatchNumber()`. Prove it on the phase A/B prover image, before the smarttoken phase C release: the phase C prover no longer has that program. It is the checkpoint ELF with SHA-256 `23f77e6d81b5fcb1d78e0088e1cd7a6534769e159100be5b62c871da8295c381` and verifying key `0x00e165bcb2001a8c756bc866a11ba4eefed05c7e27b740446e109dd09a93c306`, which must still be the registry's `checkpointVKey()` at this step. The upgrade transaction writes one backfill entry (about 25,000 gas) per batch after the last checkpoint, so about 1,000 entries fit under a 32M block gas limit (the Nitro default, not checked on chain 6300).
+3. Collect the batch hashes read-only. With `L = lastCheckpointBatchNumber()`, `C = batchCount()` and `FROM_BLOCK` at or before the anchoring of batch `L + 1`:
+
+   ```shell
+   SIG='BatchAnchored(uint256 indexed,bytes32 indexed,bytes32 indexed,bytes32,bytes32,bytes32,string,uint256,bool)'
+   for n in $(seq $((L + 1)) "$C"); do
+     cast logs --rpc-url "$RPC_URL" --address "$BATCH_REGISTRY_PROXY_ADDRESS" --from-block "$FROM_BLOCK" \
+       --json "$SIG" "$(cast to-uint256 "$n")" | jq -r '.[0].topics[2]'
+   done | paste -sd, -
+   ```
+
+   The result is `PENDING_BATCH_HASHES` (empty when `L == C`). `getBatchInfo(hash).batchNumber` must equal `n` for each one; the initializer refuses the list otherwise.
+4. Simulate:
+
+   ```shell
+   BATCH_REGISTRY_PROXY_ADDRESS=0x... DEPLOYER_ADDRESS=<owner> PENDING_BATCH_HASHES=0x...,0x... \
+   MIN_CHALLENGE_BOND=<wei> MAX_CHECKPOINT_BATCHES=100 make dry-run-upgrade-batch-registry
+   ```
+
+   The script logs the `data` argument of `upgradeToAndCall`. Read the simulated gas of `upgradeToAndCall` before sending; it must stay well below the block gas limit.
+5. Deploy the implementation (`src/BatchRegistry.sol:BatchRegistry`), compare its storage layout with `forge inspect BatchRegistry storageLayout`, and send `upgradeToAndCall(implementation, data)` from the owner.
+6. Check `minChallengeBond()`, `maxCheckpointBatches()`, `batchHashByNumber(n)` for each pending batch, and the `FinalizingCheckpointsStarted` event: its start hash equals `lastCheckpointBatchHash()`.
+7. Lower the bond to its new value with `setChallengeConfig(window, bond)` (bond at or above the floor). Register the finalizing checkpoint program key with `setVKeys` before the first `finalizeCheckpoint`.
+8. `unpause()`.
 
 For a multisig-controlled Ledger, deploy a new implementation with `make deploy-ledger-impl`, review its address and bytecode, then execute `upgradeToAndCall(newImplementation, "")` from the multisig.
 
@@ -101,5 +135,5 @@ For a complete deployment, verify:
 5. `Staking.feeDispatcher()` equals the FeeDispatcher proxy.
 6. FeeDispatcher recipients and total basis points match the approved allocation.
 7. Ledger treasury, dispatcher split, and `SENDER_ROLE` assignments are correct.
-8. BatchRegistry verifier, vkeys, sequencer, challenge window, and challenge bond are correct.
+8. BatchRegistry verifier, vkeys, sequencer, challenge window, challenge bond, `minChallengeBond`, and `maxCheckpointBatches` are correct.
 9. BridgedNFTs sequencer and base URI are correct.

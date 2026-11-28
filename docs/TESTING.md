@@ -26,6 +26,7 @@ forge test --match-path 'test/*Invariant.t.sol'
 forge test --match-path 'test/*Symbolic.t.sol'
 forge test --match-contract SystemE2ETest
 forge test --match-contract StakingTest -vvv
+forge test --match-test Gas_FinalizeCheckpoint --isolate --gas-report
 ```
 
 ## Script Verification
@@ -44,7 +45,9 @@ Dry-runs are especially important for scripts that wire existing contracts becau
 
 The current suite does not explicitly test UUPS upgrade authorization and state
 preservation, repeated initialization attempts, or the two-step ownership
-transfer lifecycle. `Vault` combines ownership with `AccessControl`; ownership
+transfer lifecycle, except the BatchRegistry checkpoint upgrade
+(`test/BatchRegistryCheckpoint.t.sol`: slot-by-slot preservation from
+`test/legacy/BatchRegistryV1.sol`, run-once reinitializer) and the Staking upgrade. `Vault` combines ownership with `AccessControl`; ownership
 transfers do not automatically move `DEFAULT_ADMIN_ROLE`. `Ledger` uses
 `AccessControl` for `SENDER_ROLE`, but grants no `DEFAULT_ADMIN_ROLE`; its
 owner-only wrapper manages sender-role grants.

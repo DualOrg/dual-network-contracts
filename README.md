@@ -6,7 +6,7 @@ Upgradeable Solidity contracts for DUAL Network, built and tested with Foundry.
 
 | Contract | Purpose |
 | --- | --- |
-| `BatchRegistry` | Anchors sequencer batches, verifies SP1 proofs, manages optimistic challenges, records checkpoints, and initiates batch-fee dispatch. |
+| `BatchRegistry` | Anchors sequencer batches, verifies SP1 proofs, manages optimistic challenges, finalizes batch ranges with validity checkpoints (`finalizeCheckpoint`), and initiates batch-fee dispatch. |
 | `FeeDispatcher` | Pulls batch fees from `Vault`, accepts pushed Ledger fees, and distributes configured basis-point shares. |
 | `Ledger` | Records role-gated fee events and splits owner-funded native DUAL between `FeeDispatcher` and treasury. |
 | `Staking` | Mints xDUAL 1:1 for native DUAL and streams dispatcher rewards to stakers. |

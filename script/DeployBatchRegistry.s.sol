@@ -15,10 +15,7 @@ contract DeployBatchRegistry is Script {
         bytes32 fraudProofVKey = vm.envBytes32("FRAUD_PROOF_VKEY");
         bytes32 checkpointVKey = vm.envBytes32("CHECKPOINT_VKEY");
         uint256 challengeWindow = vm.envOr("CHALLENGE_WINDOW", uint256(5 minutes));
-        uint256 challengeBond = vm.envOr(
-            "CHALLENGE_BOND",
-            uint256(100_000 ether) // MIN_CHALLENGE_BOND
-        );
+        uint256 challengeBond = vm.envOr("CHALLENGE_BOND", uint256(100_000 ether));
 
         console2.log("Deployer:", deployer);
         console2.log("Sequencer:", sequencer);

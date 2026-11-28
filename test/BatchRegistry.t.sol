@@ -543,6 +543,8 @@ contract BatchRegistryTest is Test {
 
     function test_SetChallengeConfig_RevertsOnBondBelowMinimum() public {
         vm.prank(owner);
+        registry.setMinChallengeBond(1 ether);
+        vm.prank(owner);
         vm.expectRevert(BatchRegistry.BondBelowMinimum.selector);
         registry.setChallengeConfig(1 hours, 0.1 ether);
     }
